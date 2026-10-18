@@ -95,6 +95,22 @@ export SENTINEL_MODEL_FILE="$HOME/.nmap_ai_baseline.json"
 ```
 
 
+## Operating systems
+
+The Python core works on Linux, Windows, and macOS.
+
+- **Linux/macOS:** run `./sentinel`. Linux attempts UFW logging; macOS/Linux can use `SENTINEL_LOG_FILE` for another log.
+- **Windows:** install Python 3, then double-click `sentinel.bat` or run `./sentinel.ps1` from PowerShell. Windows does not use UFW, so the launcher monitors `firewall.log` in the project directory by default.
+
+On Windows, use Windows Firewall logging or another authorized telemetry source and set its path:
+
+```powershell
+$env:SENTINEL_LOG_FILE = "C:\path\to\firewall.log"
+.\sentinel.bat
+```
+
+The launcher creates the correct platform virtual environment, installs dependencies, starts the detector, and opens the chatbot. It does not install OS firewall tools or change firewall rules automatically.
+
 ## Manual two-terminal mode
 
 Run the detector in one terminal and Sentinel in another:
