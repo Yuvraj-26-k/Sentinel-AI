@@ -1,0 +1,8 @@
+<Sysmon schemaversion="4.90">
+  <HashAlgorithms>SHA256</HashAlgorithms>
+  <EventFiltering>
+    <ProcessCreate onmatch="include" />
+    <NetworkConnect onmatch="include" />
+    <DnsQuery onmatch="include" />
+  </EventFiltering>
+</Sysmon>

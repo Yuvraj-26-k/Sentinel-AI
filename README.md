@@ -109,7 +109,20 @@ Sentinel automatically stores JSONL alerts in the SQLAlchemy database and can sh
 python sentinel.py --database-file /path/to/sentinel.db
 ```
 
-On Windows, install Sysmon from Microsoft's official Sysinternals documentation and configure Windows Event Log collection. Sysmon is not installed automatically by Sentinel because it requires administrator privileges and an OS-specific configuration. Export or forward Sysmon event XML to the adapter before ingestion. Linux and macOS continue using their native log sources.
+Windows launcher behavior:
+
+- `sentinel.ps1` checks for the Sysmon service.
+- If missing, it runs `install_sysmon.ps1`.
+- The installer downloads Sysmon only from the official Microsoft Sysinternals URL, installs the included configuration, and enables process, network, and DNS events.
+- Sysmon installation requires an elevated PowerShell window. If elevation or download fails, Sentinel warns and continues without Sysmon.
+
+Run PowerShell as Administrator for automatic setup:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\sentinel.ps1
+```
+
 
 
 ## Operating systems

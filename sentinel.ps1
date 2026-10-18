@@ -10,6 +10,15 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
 Write-Host "[Sentinel] Installing/checking dependencies..."
 & ".venv\Scripts\python.exe" -m pip install -q -r requirements.txt
 
+Write-Host "[Sentinel] Checking Sysmon..."
+if (-not (Get-Service -Name Sysmon64 -ErrorAction SilentlyContinue)) {
+    try {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "install_sysmon.ps1")
+    } catch {
+        Write-Warning "Sysmon setup skipped: $($_.Exception.Message)"
+    }
+}
+
 $AlertFile = if ($env:SENTINEL_ALERT_FILE) { $env:SENTINEL_ALERT_FILE } else { Join-Path $HOME ".sentinel_alerts.jsonl" }
 $ModelFile = if ($env:SENTINEL_MODEL_FILE) { $env:SENTINEL_MODEL_FILE } else { Join-Path $HOME ".nmap_ai_baseline.json" }
 $LogFile = if ($env:SENTINEL_LOG_FILE) { $env:SENTINEL_LOG_FILE } else { Join-Path $Root "firewall.log" }
