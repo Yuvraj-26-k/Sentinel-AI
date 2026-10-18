@@ -14,6 +14,16 @@ python -m pip install -r requirements.txt
 
 No API key is included or required for local detection and RAG. A cloud provider and an environment variable such as `LLM_API_KEY` must be configured separately before adding a provider adapter.
 
+## Validation
+
+Run the local regression checks without monitoring a live firewall log:
+
+```bash
+python3 -m unittest -v test_smart_detector.py
+```
+
+The tests verify that persisted alerts retain destination data, accurate event counts, confidence, and anomaly-score metadata.
+
 ```bash
 cd /home/yuvi/sentinel
 sudo ufw logging on
