@@ -1,208 +1,153 @@
-# Sentinel
+# Sentinel-AI
 
-A small defensive prototype that monitors `/var/log/ufw.log` and alerts when a source IP probes many destination ports within a short window.
+Sentinel-AI is a **defensive, local-first port-scan monitoring prototype**. It reads firewall-style log lines, detects one source probing many destination ports within a rolling window, stores alerts locally, and provides a terminal console for reviewing them.
 
-## Installation
+It is not an intrusion-prevention system, a packet capture engine, or a general-purpose AI. It **does not block IPs, change firewall rules after setup, execute response actions, or guarantee that an event is malicious**.
 
-The core detector and RAG agent use only Python's standard library. The optional cloud-LLM HTTP client is listed in `requirements.txt`.
+## What Sentinel actually does
+
+1. `smart_detector.py` reads a log file that contains `SRC=`, `DST=`, and `DPT=` fields, such as UFW firewall logs.
+2. It keeps a rolling 60-second window per source IP.
+3. It alerts when a source reaches 15 unique destination ports, or when a trained per-source statistical baseline finds an unusual event/port/rate combination.
+4. It writes JSON Lines alerts to `~/.sentinel_alerts.jsonl` by default. Each alert includes source, destination, event count, unique-port count, confidence, and anomaly metadata when available.
+5. `sentinel.py` shows new alerts in a terminal and can persist them to a local SQLite database through SQLAlchemy.
+6. `rag_agent.py` performs transparent local keyword retrieval from reviewed Markdown files in `knowledge/` and returns a recommendation. It does not call external tools or block hosts.
+
+## Requirements
+
+- Python 3.10 or newer
+- Linux with UFW logging for the default live-monitoring path
+- Permission to read the chosen log file
+- Internet access only for the one-time Python dependency install or optional Gemini explanation feature
+
+The scan detector itself uses the Python standard library. The interactive console's SQLite alert history uses SQLAlchemy, installed from `requirements.txt`.
+
+## Install
 
 ```bash
+cd /path/to/Sentinel-AI
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
-No API key is included or required for local detection and RAG. A cloud provider and an environment variable such as `LLM_API_KEY` must be configured separately before adding a provider adapter.
+Do not run the console as root. Only use elevated privileges when your operating system requires them to enable or read a protected firewall log.
 
-## Validation
+## Quick start on Linux with UFW
 
-Run the local regression checks without monitoring a live firewall log:
-
-```bash
-python3 -m unittest -v test_smart_detector.py
-```
-
-The tests verify that persisted alerts retain destination data, accurate event counts, confidence, and anomaly-score metadata.
+Enable UFW logging once if you administer this host:
 
 ```bash
-cd /home/yuvi/sentinel
 sudo ufw logging on
-sudo python3 nmap_detector.py
 ```
 
-If your system stores firewall events in a different file, specify it explicitly:
+Start the detector in one terminal:
 
 ```bash
-sudo python3 nmap_detector.py --log-file /path/to/firewall.log
+cd /path/to/Sentinel-AI
+sudo .venv/bin/python smart_detector.py \
+  --log-file /var/log/ufw.log \
+  --alert-file "$HOME/.sentinel_alerts.jsonl" \
+  --model-file "$HOME/.nmap_ai_baseline.json"
 ```
 
-If `/var/log/ufw.log` is missing, the detector now exits with instructions instead of crashing.
-
-Configuration values are at the top of `nmap_detector.py`:
-
-- `LOG_FILE`: firewall log path
-- `WINDOW_SECONDS`: rolling detection window
-- `PORT_THRESHOLD`: unique ports required for an alert
-- `ALERT_COOLDOWN`: seconds between repeated alerts for one source
-
-## Authorized test
-
-From a machine you own or are authorized to test:
+Start the console in a second terminal:
 
 ```bash
-nmap -sS -p 1-100 <authorized-test-host>
+cd /path/to/Sentinel-AI
+.venv/bin/python sentinel.py --alert-file "$HOME/.sentinel_alerts.jsonl"
 ```
 
-## Self-learning mode
+Use `help`, `status`, `alerts`, `recent`, `explain`, or `quit` in the console.
 
-Use the new detector to learn a baseline of normal activity:
-
-```bash
-sudo python3 smart_detector.py
-```
-
-It stores its baseline in `~/.nmap_ai_baseline.json`. You can choose another location:
-
-```bash
-sudo python3 smart_detector.py --log-file /path/to/firewall.log --model-file /path/to/baseline.json
-```
-
-The learner ignores suspicious windows while updating its baseline. It reports unusual behavior and never changes firewall rules automatically. Keep blocking manual until you have reviewed the alerts. Delete the model file to reset learning.
-
-This is a focused anomaly detector, not a general-purpose AI like Claude. It does not require external packages or an internet connection.
-
-## One-command startup
-
-From the project directory, run:
+### One-command launcher
 
 ```bash
 ./sentinel
 ```
 
-The launcher automatically:
-
-- Creates `.venv` if needed
-- Installs `requirements.txt`
-- Enables UFW logging when UFW is installed
-- Starts `smart_detector.py`
-- Opens the interactive Sentinel chatbot
-- Stops the detector when you quit Sentinel
-
-The launcher may ask for your sudo password to enable UFW logging. Use `Ctrl-C` or type `quit` to stop safely. If you want the command available as `sentinel` without `./`, run:
+The launcher creates `.venv` when missing, installs dependencies, attempts `sudo ufw logging on`, starts `smart_detector.py`, then opens the terminal console. It does not automatically block a source. To monitor another compatible log file, set:
 
 ```bash
-mkdir -p ~/.local/bin
-ln -sf "$PWD/sentinel" ~/.local/bin/sentinel
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Optional settings:
-
-```bash
-export SENTINEL_LOG_FILE=/var/log/ufw.log
+export SENTINEL_LOG_FILE=/path/to/firewall.log
 export SENTINEL_ALERT_FILE="$HOME/.sentinel_alerts.jsonl"
 export SENTINEL_MODEL_FILE="$HOME/.nmap_ai_baseline.json"
+./sentinel
 ```
 
+## Use another compatible log source
 
-## Sysmon and SQLAlchemy
-
-Sentinel now includes:
-
-- `sysmon_adapter.py`: normalizes exported Windows Sysmon XML events.
-- `alert_store.py`: stores normalized alerts in SQLite through SQLAlchemy.
-- `~/.sentinel.db`: default local alert database.
-
-Sentinel automatically stores JSONL alerts in the SQLAlchemy database and can show recent history with `status` or `alerts`. Use another database path with:
-
-```bash
-python sentinel.py --database-file /path/to/sentinel.db
-```
-
-Windows launcher behavior:
-
-- `sentinel.ps1` checks for the Sysmon service.
-- If missing, it runs `install_sysmon.ps1`.
-- The installer downloads Sysmon only from the official Microsoft Sysinternals URL, installs the included configuration, and enables process, network, and DNS events.
-- Sysmon installation requires an elevated PowerShell window. If elevation or download fails, Sentinel warns and continues without Sysmon.
-
-Run PowerShell as Administrator for automatic setup:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\sentinel.ps1
-```
-
-
-
-## Operating systems
-
-The Python core works on Linux, Windows, and macOS.
-
-- **Linux/macOS:** run `./sentinel`. Linux attempts UFW logging; macOS/Linux can use `SENTINEL_LOG_FILE` for another log.
-- **Windows:** install Python 3, then double-click `sentinel.bat` or run `./sentinel.ps1` from PowerShell. Windows does not use UFW, so the launcher monitors `firewall.log` in the project directory by default.
-
-On Windows, use Windows Firewall logging or another authorized telemetry source and set its path:
-
-```powershell
-$env:SENTINEL_LOG_FILE = "C:\path\to\firewall.log"
-.\sentinel.bat
-```
-
-The launcher creates the correct platform virtual environment, installs dependencies, starts the detector, and opens the chatbot. It does not install OS firewall tools or change firewall rules automatically.
-
-## Manual two-terminal mode
-
-Run the detector in one terminal and Sentinel in another:
-
-```bash
-sudo python smart_detector.py --alert-file ~/.sentinel_alerts.jsonl
-python sentinel.py
-```
-
-Sentinel supports:
+The current detector requires lines containing all three fields below in any order:
 
 ```text
-status
-alerts
-recent
-what happened
-explain
-help
-quit
+SRC=<source-ip> ... DST=<destination-ip> ... DPT=<destination-port>
 ```
 
-The optional Gemini integration is enabled only when `GEMINI_API_KEY` exists:
+Example:
 
 ```bash
-export GEMINI_API_KEY="your-replacement-key"
+.venv/bin/python smart_detector.py --log-file /path/to/compatible.log
+```
+
+If a source does not emit these fields, Sentinel will not parse it. UFW is the default supported live source. Packet-level sources such as Zeek or Suricata require a dedicated adapter before their native logs can be monitored directly.
+
+## Detection and baseline behavior
+
+- Rolling window: 60 seconds
+- Port-scan threshold: 15 unique destination ports
+- Baseline features: number of events, number of unique ports, and unique ports per second
+- Baseline learning: a source needs at least 20 normal samples before statistical anomaly scoring is available
+- Alert cooldown: 300 seconds per source
+
+Suspicious windows are not added to the baseline. Delete the model file to reset learned values. A high score is a signal for review, not proof of an attack.
+
+## Local analyst and knowledge retrieval
+
+Analyze supplied scan features:
+
+```bash
+.venv/bin/python rag_agent.py --source 192.0.2.10 --events 20 --unique-ports 18 --duration 10
+```
+
+Search the local guidance:
+
+```bash
+.venv/bin/python rag_agent.py --query "port scan response"
+```
+
+`rag_agent.py` combines fixed thresholds, the saved baseline, and keyword-matched excerpts from `knowledge/*.md`. Its output is an explainable JSON recommendation, not autonomous action.
+
+## Optional Gemini explanation
+
+The `explain` console command can request a cloud explanation only when you intentionally configure `GEMINI_API_KEY`:
+
+```bash
+export GEMINI_API_KEY="your_private_key"
 export GEMINI_MODEL="gemini-2.0-flash"
-python sentinel.py
+.venv/bin/python sentinel.py
 ```
 
-Type `explain` to request a cloud explanation. If the key is missing or Gemini is unavailable, Sentinel automatically uses its local explanation. Never commit or paste an API key. Revoke any key that has been exposed.
+Without a key, Sentinel uses its local explanation. Never commit an API key. Supplying a key means the selected alert context is sent to that provider.
 
-When a new scan alert arrives, Sentinel prints a boxed alert immediately. Automatic blocking remains disabled.
+## Windows and macOS
 
-## RAG, agentic analysis, and ML
+- **Windows:** `sentinel.ps1` creates a virtual environment, installs Python dependencies, optionally runs the included Sysmon installer, and watches `firewall.log` in the project folder by default. Set `SENTINEL_LOG_FILE` to a compatible Windows Firewall or converted log file. Sysmon XML normalization is provided by `sysmon_adapter.py`, but it is not automatically wired into the live detector.
+- **macOS:** use a compatible log file with `SENTINEL_LOG_FILE`. UFW is not the default macOS firewall, so `/var/log/ufw.log` will normally not exist.
 
-`rag_agent.py` adds a local SentinelAI workflow:
+## Safe authorized test
+
+Only from a system you own or are explicitly authorized to test:
 
 ```bash
-python3 rag_agent.py --source 192.0.2.10 --events 20 --unique-ports 18 --duration 10
+nmap -sS -p 1-100 <authorized-test-host>
 ```
 
-The agent performs four safe steps:
+Review the resulting alert and corroborate it with host, firewall, and network telemetry before any response decision.
 
-1. **Observe:** accepts scan features and reads the persisted ML baseline.
-2. **Reason:** combines port count, probe rate, and anomaly score into confidence.
-3. **Retrieve:** searches Markdown guidance in `knowledge/` and returns cited excerpts.
-4. **Recommend:** produces JSON with classification, signals, evidence, and a response recommendation.
-
-Search the RAG knowledge base directly:
+## Validate changes
 
 ```bash
-python3 rag_agent.py --query "stealth encrypted scan response"
+.venv/bin/python -m unittest -v test_smart_detector.py
 ```
 
-This implementation uses transparent local keyword retrieval and the existing statistical ML baseline. It does not call a cloud LLM, execute arbitrary tools, or block IPs. Add reviewed Markdown documents to `knowledge/` to expand its grounded guidance. For richer packet-level ML, connect Zeek or Suricata telemetry rather than relying on UFW alone.
+The tests cover alert schema fidelity and a full parsed-log-to-alert path. They do not validate a real firewall, packet capture, or production incident response workflow.
