@@ -2,7 +2,17 @@
 
 A small defensive prototype that monitors `/var/log/ufw.log` and alerts when a source IP probes many destination ports within a short window.
 
-## Run
+## Installation
+
+The core detector and RAG agent use only Python's standard library. The optional cloud-LLM HTTP client is listed in `requirements.txt`.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+No API key is included or required for local detection and RAG. A cloud provider and an environment variable such as `LLM_API_KEY` must be configured separately before adding a provider adapter.
 
 ```bash
 cd /home/yuvi/nmap_ai_detector

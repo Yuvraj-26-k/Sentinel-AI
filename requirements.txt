@@ -1,0 +1,2 @@
+# Optional cloud LLM HTTP client
+requests>=2.31,<3
