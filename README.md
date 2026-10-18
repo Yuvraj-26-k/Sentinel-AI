@@ -1,4 +1,4 @@
-# Nmap AI Detector
+# Sentinel
 
 A small defensive prototype that monitors `/var/log/ufw.log` and alerts when a source IP probes many destination ports within a short window.
 
@@ -15,7 +15,7 @@ python -m pip install -r requirements.txt
 No API key is included or required for local detection and RAG. A cloud provider and an environment variable such as `LLM_API_KEY` must be configured separately before adding a provider adapter.
 
 ```bash
-cd /home/yuvi/nmap_ai_detector
+cd /home/yuvi/sentinel
 sudo ufw logging on
 sudo python3 nmap_detector.py
 ```
