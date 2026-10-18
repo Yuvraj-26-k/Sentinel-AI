@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import sys
 import threading
 import time
 from collections import deque
@@ -17,6 +18,32 @@ try:
     from cloud_llm import explain_alert as explain_with_gemini
 except ImportError:
     explain_with_gemini = None
+
+RESET = "\033[0m"
+CYAN = "\033[96m"
+BLUE = "\033[94m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+MAGENTA = "\033[95m"
+DIM = "\033[2m"
+
+
+def banner():
+    if not sys.stdout.isatty():
+        return
+    print(f"{CYAN}╔══════════════════════════════════════════════════╗{RESET}")
+    print(f"{BLUE}║{RESET}  {MAGENTA}🛡  S E N T I N E L   A I{RESET}                    {BLUE}║{RESET}")
+    print(f"{CYAN}║{RESET}  {DIM}Adaptive security monitoring console{RESET}          {CYAN}║{RESET}")
+    print(f"{CYAN}╚══════════════════════════════════════════════════╝{RESET}")
+
+
+def loading(message="Initializing security modules"):
+    if not sys.stdout.isatty():
+        return
+    for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
+        print(f"\r{CYAN}{frame}{RESET} {message}...", end="", flush=True)
+        time.sleep(0.04)
+    print(f"\r{GREEN}✔{RESET} {message} ready.{' ' * 10}")
 
 
 class Sentinel:
@@ -77,7 +104,7 @@ class Sentinel:
         if command in {"quit", "exit", "q"}:
             return False
         if command in {"help", "?"}:
-            print("Commands: status, alerts, recent, what happened, help, quit")
+            print(f"{CYAN}Commands{RESET}: {YELLOW}status{RESET}, {YELLOW}alerts{RESET}, {YELLOW}recent{RESET}, {YELLOW}what happened{RESET}, {YELLOW}explain{RESET}, {YELLOW}help{RESET}, {YELLOW}quit{RESET}")
         elif command in {"status", "what happened", "what happened?", "recent", "alerts"}:
             stored = self.store.recent(5) if self.store else []
             if not self.alerts and not stored:
@@ -115,7 +142,11 @@ def main():
     sentinel.load_existing()
     watcher = threading.Thread(target=sentinel.watch, daemon=True)
     watcher.start()
-    print("Sentinel is online. Type 'help' for commands.")
+    banner()
+    loading("Loading ML and alert engine")
+    loading("Connecting local alert database")
+    loading("Starting live event watcher")
+    print(f"{GREEN}Sentinel is online{RESET}. Type {YELLOW}'help'{RESET} for commands.")
     try:
         while sentinel.answer(input("sentinel> ")):
             pass
