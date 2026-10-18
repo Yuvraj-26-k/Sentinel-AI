@@ -71,7 +71,7 @@ class Baseline:
         os.replace(temporary, self.path)
 
 
-def report(source, ports, values, score, learning, alert_file):
+def report(source, destination, ports, values, score, learning, alert_file):
     now = time.time()
     if now - last_alert.get(source, 0) < 300:
         return
@@ -80,10 +80,13 @@ def report(source, ports, values, score, learning, alert_file):
     event = {
         "time": datetime.now().isoformat(timespec="seconds"),
         "source": source,
+        "destination": destination,
         "event": "possible_port_scan",
         "unique_ports": len(ports),
-        "events": len(ports),
+        "events": values[0],
         "mode": mode,
+        "anomaly_score": round(score, 2) if score is not None else None,
+        "confidence": "high" if len(ports) >= PORT_THRESHOLD else "medium",
         "recommendation": "review and correlate; automatic blocking is disabled",
     }
     parent = os.path.dirname(alert_file)
@@ -103,6 +106,7 @@ def process_line(line, baseline, alert_file):
     if not match:
         return
     source = match.group("src")
+    destination = match.group("dst")
     port = int(match.group("dpt"))
     now = time.time()
     events[source].append((now, port))
@@ -115,7 +119,7 @@ def process_line(line, baseline, alert_file):
     suspicious = len(ports) >= PORT_THRESHOLD or (score is not None and score >= ANOMALY_Z)
 
     if suspicious:
-        report(source, ports, values, score or 0.0, score is None, alert_file)
+        report(source, destination, ports, values, score, score is None, alert_file)
     elif len(events[source]) >= 3:
         baseline.update(source, values)
 
