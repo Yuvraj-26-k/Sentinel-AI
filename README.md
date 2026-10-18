@@ -82,7 +82,17 @@ help
 quit
 ```
 
-When a new scan alert arrives, it prints a boxed alert immediately. The detector writes structured JSON events to `~/.sentinel_alerts.jsonl`. The chatbot uses only Python's standard library and does not require a cloud API. Automatic blocking remains disabled.
+The optional Gemini integration is enabled only when `GEMINI_API_KEY` exists:
+
+```bash
+export GEMINI_API_KEY="your-replacement-key"
+export GEMINI_MODEL="gemini-2.0-flash"
+python sentinel.py
+```
+
+Type `explain` to request a cloud explanation. If the key is missing or Gemini is unavailable, Sentinel automatically uses its local explanation. Never commit or paste an API key. Revoke any key that has been exposed.
+
+When a new scan alert arrives, Sentinel prints a boxed alert immediately. Automatic blocking remains disabled.
 
 ## RAG, agentic analysis, and ML
 

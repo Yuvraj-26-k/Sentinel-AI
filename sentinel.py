@@ -8,6 +8,11 @@ import threading
 import time
 from collections import deque
 
+try:
+    from cloud_llm import explain_alert as explain_with_gemini
+except ImportError:
+    explain_with_gemini = None
+
 
 class Sentinel:
     def __init__(self, alert_file):
@@ -75,7 +80,14 @@ class Sentinel:
         elif command == "explain":
             if self.alerts:
                 event = self.alerts[-1]
-                print("Sentinel: Multiple ports were probed. Review the source and correlate with Zeek or Suricata. Automatic blocking is disabled.")
+                try:
+                    cloud_answer = explain_with_gemini(event) if explain_with_gemini else None
+                except Exception as error:
+                    cloud_answer = f"Gemini unavailable ({type(error).__name__}); using local explanation."
+                if cloud_answer:
+                    print("Sentinel Gemini analysis:\n" + cloud_answer)
+                else:
+                    print("Sentinel local analysis: Multiple ports were probed. Review the source and correlate with Zeek or Suricata. Automatic blocking is disabled.")
                 print(self.render(event))
             else:
                 print("Sentinel: There is no alert to explain.")
