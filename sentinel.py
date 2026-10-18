@@ -9,14 +9,20 @@ import time
 from collections import deque
 
 try:
+    from alert_store import AlertStore
+except ImportError:
+    AlertStore = None
+
+try:
     from cloud_llm import explain_alert as explain_with_gemini
 except ImportError:
     explain_with_gemini = None
 
 
 class Sentinel:
-    def __init__(self, alert_file):
+    def __init__(self, alert_file, database_file="~/.sentinel.db"):
         self.alert_file = alert_file
+        self.store = AlertStore(database_file) if AlertStore else None
         self.alerts = deque(maxlen=50)
         self.stop = threading.Event()
         self.position = 0
@@ -36,6 +42,8 @@ class Sentinel:
         except json.JSONDecodeError:
             return
         self.alerts.append(event)
+        if self.store:
+            self.store.add(event)
         print("\n" + self.render(event) + "\nsentinel> ", end="", flush=True)
 
     def watch(self):
@@ -71,11 +79,13 @@ class Sentinel:
         if command in {"help", "?"}:
             print("Commands: status, alerts, recent, what happened, help, quit")
         elif command in {"status", "what happened", "what happened?", "recent", "alerts"}:
-            if not self.alerts:
+            stored = self.store.recent(5) if self.store else []
+            if not self.alerts and not stored:
                 print("Sentinel: No scan alerts recorded yet.")
             else:
-                print(f"Sentinel: {len(self.alerts)} alert(s) recorded.")
-                for event in list(self.alerts)[-5:]:
+                print(f"Sentinel: {len(stored) or len(self.alerts)} alert(s) recorded.")
+                rows = stored or list(self.alerts)[-5:]
+                for event in rows:
                     print(f"- {event.get('time')} | {event.get('source')} | {event.get('event')}")
         elif command == "explain":
             if self.alerts:
@@ -99,8 +109,9 @@ class Sentinel:
 def main():
     parser = argparse.ArgumentParser(description="Sentinel interactive security chatbot")
     parser.add_argument("--alert-file", default=os.path.expanduser("~/.sentinel_alerts.jsonl"))
+    parser.add_argument("--database-file", default=os.path.expanduser("~/.sentinel.db"))
     args = parser.parse_args()
-    sentinel = Sentinel(os.path.expanduser(args.alert_file))
+    sentinel = Sentinel(os.path.expanduser(args.alert_file), args.database_file)
     sentinel.load_existing()
     watcher = threading.Thread(target=sentinel.watch, daemon=True)
     watcher.start()

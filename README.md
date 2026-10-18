@@ -95,6 +95,23 @@ export SENTINEL_MODEL_FILE="$HOME/.nmap_ai_baseline.json"
 ```
 
 
+## Sysmon and SQLAlchemy
+
+Sentinel now includes:
+
+- `sysmon_adapter.py`: normalizes exported Windows Sysmon XML events.
+- `alert_store.py`: stores normalized alerts in SQLite through SQLAlchemy.
+- `~/.sentinel.db`: default local alert database.
+
+Sentinel automatically stores JSONL alerts in the SQLAlchemy database and can show recent history with `status` or `alerts`. Use another database path with:
+
+```bash
+python sentinel.py --database-file /path/to/sentinel.db
+```
+
+On Windows, install Sysmon from Microsoft's official Sysinternals documentation and configure Windows Event Log collection. Sysmon is not installed automatically by Sentinel because it requires administrator privileges and an OS-specific configuration. Export or forward Sysmon event XML to the adapter before ingestion. Linux and macOS continue using their native log sources.
+
+
 ## Operating systems
 
 The Python core works on Linux, Windows, and macOS.
