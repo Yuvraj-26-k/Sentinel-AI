@@ -61,6 +61,29 @@ The learner ignores suspicious windows while updating its baseline. It reports u
 
 This is a focused anomaly detector, not a general-purpose AI like Claude. It does not require external packages or an internet connection.
 
+## Sentinel interactive chatbot
+
+Run the detector in one terminal and Sentinel in another:
+
+```bash
+sudo python smart_detector.py --alert-file ~/.sentinel_alerts.jsonl
+python sentinel.py
+```
+
+Sentinel supports:
+
+```text
+status
+alerts
+recent
+what happened
+explain
+help
+quit
+```
+
+When a new scan alert arrives, it prints a boxed alert immediately. The detector writes structured JSON events to `~/.sentinel_alerts.jsonl`. The chatbot uses only Python's standard library and does not require a cloud API. Automatic blocking remains disabled.
+
 ## RAG, agentic analysis, and ML
 
 `rag_agent.py` adds a local SentinelAI workflow:
