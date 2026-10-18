@@ -15,6 +15,11 @@ except ImportError:
     AlertStore = None
 
 try:
+    from cloud_llm import chat as chat_with_gemini
+except ImportError:
+    chat_with_gemini = None
+
+try:
     from cloud_llm import explain_alert as explain_with_gemini
 except ImportError:
     explain_with_gemini = None
@@ -129,7 +134,17 @@ class Sentinel:
             else:
                 print("Sentinel: There is no alert to explain.")
         else:
-            print("Sentinel: I do not know that command. Type 'help'.")
+            context = "No alert yet." if not self.alerts else repr(self.alerts[-1])
+            try:
+                answer = chat_with_gemini(command, context) if chat_with_gemini else None
+            except Exception as error:
+                answer = f"Cloud assistant unavailable ({type(error).__name__})."
+            if answer:
+                print(f"{CYAN}Sentinel Gemini{RESET}: {answer}")
+            elif any(word in command for word in {"safe", "security", "status", "happening", "alert"}):
+                print(f"{GREEN}Sentinel{RESET}: I am monitoring the alert stream. Automatic blocking is disabled. Type {YELLOW}'alerts'{RESET} or {YELLOW}'explain'{RESET} for details.")
+            else:
+                print(f"{GREEN}Sentinel{RESET}: Ask me about alerts, scans, safety, status, or type {YELLOW}'help'{RESET}.")
         return True
 
 
