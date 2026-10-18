@@ -11,6 +11,7 @@ import smart_detector
 class SmartDetectorTests(unittest.TestCase):
     def setUp(self):
         smart_detector.last_alert.clear()
+        smart_detector.events.clear()
 
     def test_report_persists_complete_event_counts_and_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -49,6 +50,23 @@ class SmartDetectorTests(unittest.TestCase):
         self.assertIsNone(event["anomaly_score"])
         self.assertEqual(event["confidence"], "high")
         self.assertEqual(event["mode"], "learning")
+
+    def test_parsed_firewall_lines_create_a_complete_alert(self):
+        with tempfile.TemporaryDirectory() as directory:
+            alert_file = Path(directory, "alerts.jsonl")
+            for port in range(1, smart_detector.PORT_THRESHOLD + 1):
+                smart_detector.process_line(
+                    f"[UFW BLOCK] SRC=192.0.2.99 DST=198.51.100.99 DPT={port}",
+                    smart_detector.Baseline(str(Path(directory, "baseline.json"))),
+                    str(alert_file),
+                )
+            event = json.loads(alert_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(event["source"], "192.0.2.99")
+        self.assertEqual(event["destination"], "198.51.100.99")
+        self.assertEqual(event["events"], smart_detector.PORT_THRESHOLD)
+        self.assertEqual(event["unique_ports"], smart_detector.PORT_THRESHOLD)
+        self.assertIsNone(event["anomaly_score"])
 
 
 if __name__ == "__main__":
