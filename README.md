@@ -50,3 +50,26 @@ sudo python3 smart_detector.py --log-file /path/to/firewall.log --model-file /pa
 The learner ignores suspicious windows while updating its baseline. It reports unusual behavior and never changes firewall rules automatically. Keep blocking manual until you have reviewed the alerts. Delete the model file to reset learning.
 
 This is a focused anomaly detector, not a general-purpose AI like Claude. It does not require external packages or an internet connection.
+
+## RAG, agentic analysis, and ML
+
+`rag_agent.py` adds a local SentinelAI workflow:
+
+```bash
+python3 rag_agent.py --source 192.0.2.10 --events 20 --unique-ports 18 --duration 10
+```
+
+The agent performs four safe steps:
+
+1. **Observe:** accepts scan features and reads the persisted ML baseline.
+2. **Reason:** combines port count, probe rate, and anomaly score into confidence.
+3. **Retrieve:** searches Markdown guidance in `knowledge/` and returns cited excerpts.
+4. **Recommend:** produces JSON with classification, signals, evidence, and a response recommendation.
+
+Search the RAG knowledge base directly:
+
+```bash
+python3 rag_agent.py --query "stealth encrypted scan response"
+```
+
+This implementation uses transparent local keyword retrieval and the existing statistical ML baseline. It does not call a cloud LLM, execute arbitrary tools, or block IPs. Add reviewed Markdown documents to `knowledge/` to expand its grounded guidance. For richer packet-level ML, connect Zeek or Suricata telemetry rather than relying on UFW alone.
