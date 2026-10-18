@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    cat <<'HELP'
+Sentinel one-command launcher
+
+Run from this project directory:
+  ./sentinel
+
+It creates/activates the local virtual environment, installs dependencies,
+enables UFW logging when available, starts the detector, and opens the chatbot.
+Optional Gemini configuration is read from GEMINI_API_KEY and GEMINI_MODEL.
+HELP
+    exit 0
+fi
+
+if [[ ! -x .venv/bin/python ]]; then
+    echo "[Sentinel] Creating Python virtual environment..."
+    python3 -m venv .venv
+fi
+
+echo "[Sentinel] Installing/checking dependencies..."
+.venv/bin/python -m pip install -q -r requirements.txt
+
+if command -v ufw >/dev/null 2>&1; then
+    echo "[Sentinel] Enabling UFW logging (sudo may ask for your password)..."
+    if ! sudo ufw logging on; then
+        echo "[Sentinel] Warning: could not enable UFW logging. Continuing." >&2
+    fi
+else
+    echo "[Sentinel] Warning: ufw is not installed. Use another supported log source." >&2
+fi
+
+ALERT_FILE="${SENTINEL_ALERT_FILE:-$HOME/.sentinel_alerts.jsonl}"
+MODEL_FILE="${SENTINEL_MODEL_FILE:-$HOME/.nmap_ai_baseline.json}"
+LOG_FILE="${SENTINEL_LOG_FILE:-/var/log/ufw.log}"
+
+mkdir -p "$(dirname "$ALERT_FILE")" "$(dirname "$MODEL_FILE")"
+echo "[Sentinel] Starting detector and chatbot..."
+.venv/bin/python smart_detector.py \
+    --log-file "$LOG_FILE" \
+    --model-file "$MODEL_FILE" \
+    --alert-file "$ALERT_FILE" &
+DETECTOR_PID=$!
+
+cleanup() {
+    kill "$DETECTOR_PID" 2>/dev/null || true
+    wait "$DETECTOR_PID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+.venv/bin/python sentinel.py --alert-file "$ALERT_FILE"

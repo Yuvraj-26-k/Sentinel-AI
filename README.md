@@ -61,7 +61,41 @@ The learner ignores suspicious windows while updating its baseline. It reports u
 
 This is a focused anomaly detector, not a general-purpose AI like Claude. It does not require external packages or an internet connection.
 
-## Sentinel interactive chatbot
+## One-command startup
+
+From the project directory, run:
+
+```bash
+./sentinel
+```
+
+The launcher automatically:
+
+- Creates `.venv` if needed
+- Installs `requirements.txt`
+- Enables UFW logging when UFW is installed
+- Starts `smart_detector.py`
+- Opens the interactive Sentinel chatbot
+- Stops the detector when you quit Sentinel
+
+The launcher may ask for your sudo password to enable UFW logging. Use `Ctrl-C` or type `quit` to stop safely. If you want the command available as `sentinel` without `./`, run:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$PWD/sentinel" ~/.local/bin/sentinel
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Optional settings:
+
+```bash
+export SENTINEL_LOG_FILE=/var/log/ufw.log
+export SENTINEL_ALERT_FILE="$HOME/.sentinel_alerts.jsonl"
+export SENTINEL_MODEL_FILE="$HOME/.nmap_ai_baseline.json"
+```
+
+
+## Manual two-terminal mode
 
 Run the detector in one terminal and Sentinel in another:
 
