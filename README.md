@@ -22,9 +22,10 @@ an attack.
   aggregation, event timelines, source health, and restart recovery.
 - **Evidence-grounded analysis:** local triage guidance and optional Gemini
   analysis can only surface alert evidence and approved investigation steps.
-- **Optional online research:** Gemini Google Search grounding returns source
-  links; Sentinel asks before each external query. Answers can be incomplete,
-  and no AI can guarantee 100% factual accuracy.
+- **Optional online research feature:** Gemini Google Search grounding returns
+  source links; Sentinel asks before each external query. Requires a Google
+  account to create a Gemini API key. ChatGPT login is not supported. Answers
+  can be incomplete; no AI can guarantee 100% factual accuracy.
 - **Opt-in file utilities:** coarse analysis of one local text log and
   non-recursive metadata collection for selected evidence-file extensions,
   plus streaming SHA-2 file hashing.
@@ -195,6 +196,11 @@ turns, and relevant retrieved knowledge. Chat history stays in memory for the
 current console only. Sentinel does not attach local logs or alerts to normal
 chat. Time-sensitive requests (such as those asking for current or latest
 information) use Gemini Google Search grounding and show available citations.
+To enable it, sign in to Google AI Studio with a Google account, create a
+Gemini API key, and set `GEMINI_API_KEY` in the shell before starting Sentinel.
+Google Search grounding is provided through that Gemini API authorization;
+ChatGPT login or an OpenAI account is not currently supported. API availability,
+quotas, and any charges are subject to Google's account and API terms.
 `explain` separately asks before sending alert telemetry to Gemini for evidence
 selection. Answers can be wrong or incomplete; verify important information
 with primary sources. There is no 100% accuracy guarantee. Without a key, local

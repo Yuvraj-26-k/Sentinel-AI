@@ -684,18 +684,21 @@ class SentinelUiTests(unittest.TestCase):
             patch("builtins.input", return_value="status") as read_input,
             patch.dict("os.environ", {}, clear=True),
         ):
-            answer = _prompt_input("command")
+            answer = _prompt_input()
         self.assertEqual(answer, "status")
         self.assertEqual(sleep.call_count, 3)
         self.assertIn("\033[96m", stdout.getvalue())
         self.assertIn("\033[92m", read_input.call_args.args[0])
-        self.assertIn("sentinel", read_input.call_args.args[0])
+        self.assertEqual(
+            read_input.call_args.args[0],
+            "\033[95m>\033[0m \033[96m\033[0m\033[92m",
+        )
 
     def test_noninteractive_or_no_color_prompt_has_no_ansi_sequences(self):
         with patch("sentinel.sys.stdout", io.StringIO()):
             with patch("builtins.input", return_value="status") as read_input:
-                self.assertEqual(_prompt_input("command"), "status")
-        self.assertEqual(read_input.call_args.args, ("command",))
+                self.assertEqual(_prompt_input(), "status")
+        self.assertEqual(read_input.call_args.args, ("> ",))
 
         class TTYBuffer(io.StringIO):
             def isatty(self):
@@ -708,9 +711,20 @@ class SentinelUiTests(unittest.TestCase):
             patch("builtins.input", return_value="status") as read_input,
             patch.dict("os.environ", {"NO_COLOR": "1"}),
         ):
-            self.assertEqual(_prompt_input("command"), "status")
+            self.assertEqual(_prompt_input(), "status")
         self.assertNotIn("\033[", stdout.getvalue())
         self.assertNotIn("\033[", read_input.call_args.args[0])
+
+    def test_online_setup_explains_google_gemini_auth_and_chatgpt_limitation(self):
+        with patch.dict("os.environ", {}, clear=True), patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as stdout:
+            Sentinel._show_online_setup()
+        output = stdout.getvalue()
+        self.assertIn("Google account", output)
+        self.assertIn("Gemini API key", output)
+        self.assertIn("ChatGPT login is not supported", output)
+
     def test_hashing_streams_file_and_writes_exclusive_digest_report(self):
         import hashlib
 
@@ -1147,7 +1161,7 @@ class SentinelUiTests(unittest.TestCase):
                     self.assertTrue(terminal.answer("features"))
                 rendered = output.getvalue()
                 self.assertIn("\033[2J\033[H", rendered)
-                self.assertIn("INTEGRATED FEATURES", rendered)
+                self.assertIn("FEATURES", rendered)
                 self.assertIn("LATEST REPORT", rendered)
                 self.assertIn("Example saved-safe report", rendered)
                 self.assertIn("> Secure one-time password", rendered)

@@ -418,7 +418,7 @@ def scan_animation(enabled=True):
     print(f"\r{GREEN}[{'─' * (width + 1)}]{RESET} {GREEN}telemetry ready{RESET}")
 
 
-def _prompt_input(prompt, input_fn=None, animate=True):
+def _prompt_input(prompt="", input_fn=None, animate=True):
     input_fn = input if input_fn is None else input_fn
     interactive = sys.stdout.isatty()
     use_color = interactive and "NO_COLOR" not in os.environ
@@ -433,12 +433,12 @@ def _prompt_input(prompt, input_fn=None, animate=True):
         reset = "\033[0m"
         prompt_color = "\033[95m"
         value = input_fn(
-            f"{prompt_color}sentinel{reset} {prompt_color}›{reset} "
+            f"{prompt_color}>{reset} "
             f"\033[96m{prompt}{reset}\033[92m"
         )
         print(reset, end="", flush=True)
         return value
-    return input_fn(prompt)
+    return input_fn(f"> {prompt}" if prompt else "> ")
 
 
 def _monitor_source(arguments):
@@ -1036,7 +1036,7 @@ class Sentinel:
             "Evidence-file metadata collection",
             "Streaming SHA-2 file hashing",
             "Secure one-time password generation and checks",
-            "Google Search research (asks before sending)",
+            "Google Search research (Google account + Gemini API key; no ChatGPT login)",
         )
         width = max(80, min(shutil.get_terminal_size((100, 24)).columns, 120))
         left_width = max(35, width // 2 - 5)
@@ -1047,7 +1047,7 @@ class Sentinel:
             "or ask an online research question.",
             "Saving always requires confirmation.",
         ]
-        print(f"{CYAN}SENTINEL • INTEGRATED FEATURES{RESET}")
+        print(f"{CYAN}SENTINEL • FEATURES{RESET}")
         feature_content = []
         for feature in feature_rows:
             feature_content.extend(
@@ -1092,8 +1092,10 @@ class Sentinel:
             print("Online research is unavailable because no compatible web-search response was returned.")
         else:
             print(
-                "Online research needs a Gemini API key with Google Search grounding. "
-                "Set GEMINI_API_KEY and GEMINI_WEB_MODEL if you want to enable it."
+                "Google Search is an optional feature. Sign in to Google AI Studio "
+                "with a Google account, create a Gemini API key, then set "
+                "GEMINI_API_KEY in this terminal before starting Sentinel. "
+                "Sentinel uses Gemini API authorization; ChatGPT login is not supported."
             )
 
     def _show_help(self):
@@ -1299,7 +1301,7 @@ def main():
         if sys.stdout.isatty():
             sentinel._show_features()
         print(f"{GREEN}{state}{RESET}. Type {YELLOW}'help'{RESET} for commands.")
-        while sentinel.answer(_prompt_input("command")):
+        while sentinel.answer(_prompt_input()):
             pass
     except (KeyboardInterrupt, EOFError):
         print("\nSentinel stopped.")
