@@ -23,7 +23,8 @@ an attack.
 - **Evidence-grounded analysis:** local triage guidance and optional Gemini
   analysis can only surface alert evidence and approved investigation steps.
 - **Optional online research feature:** Gemini Google Search grounding returns
-  source links; Sentinel asks before each external query. Requires a Google
+  source links. Ask a natural-language question at the prompt or use
+  `google QUESTION`; Sentinel asks before each external query. Requires a Google
   account to create a Gemini API key. ChatGPT login is not supported. Answers
   can be incomplete; no AI can guarantee 100% factual accuracy.
 - **Opt-in file utilities:** coarse analysis of one local text log and
@@ -180,22 +181,25 @@ two-panel overview; its feature list does not show scan history.
 ### NLP, RAG, analyst agent, and online LLM
 
 Natural-language commands are routed locally using token normalization,
-common inflections, and intent phrases. With `GEMINI_API_KEY`, you can ask
-questions in normal language and continue with follow-ups; a bounded recent
-conversation is held in memory for the current console. Relevant queries first
-retrieve from a small local security knowledge base (built-in triage notes plus
-optional Markdown files in `knowledge/`) and supply those excerpts as context.
+common inflections, and intent phrases. With `GEMINI_API_KEY`, ask a question
+in normal language to search Google and continue with follow-ups; a bounded
+recent conversation is held in memory for the current console. Other
+conversational messages use Gemini chat. Relevant chat requests can retrieve
+from a small local security knowledge base (built-in triage notes plus optional
+Markdown files in `knowledge/`) and supply those excerpts as context.
 The bounded analyst agent combines retrieved guidance with the recorded alert's
 deterministic evidence analysis; retrieved text is marked as guidance, never
 incident evidence. Without an API key, matching local guidance is displayed
-instead of a generated conversational answer.
+instead of a generated answer.
 
-Set `GEMINI_API_KEY` and, optionally, `GEMINI_WEB_MODEL` to enable conversational
-LLM answers. Each turn asks before sending the question, up to eight recent chat
-turns, and relevant retrieved knowledge. Chat history stays in memory for the
+Set `GEMINI_API_KEY` and, optionally, `GEMINI_WEB_MODEL` to enable online
+research and conversational LLM answers. Natural-language questions use Google
+Search grounding and ask before sending the question plus up to four recent
+chat turns. Other conversational requests ask before sending up to eight recent
+turns and relevant retrieved guidance. Chat history stays in memory for the
 current console only. Sentinel does not attach local logs or alerts to normal
-chat. Time-sensitive requests (such as those asking for current or latest
-information) use Gemini Google Search grounding and show available citations.
+chat. Use `google QUESTION` to search explicitly. Citations are shown when
+available, and Sentinel asks before every external request.
 To enable it, sign in to Google AI Studio with a Google account, create a
 Gemini API key, and set `GEMINI_API_KEY` in the shell before starting Sentinel.
 Google Search grounding is provided through that Gemini API authorization;

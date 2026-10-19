@@ -32,6 +32,7 @@ from analyst import (
     web_research,
 )
 from detection import detector_main
+from telemetry import default_log_file
 
 EVIDENCE_EXTENSIONS = {".txt", ".log", ".pdf", ".docx", ".exe", ".bat", ".ps1"}
 EMAIL_CANDIDATE_RE = re.compile(
@@ -456,7 +457,16 @@ def _monitor_source(arguments):
     return source
 
 
-def _prepare_linux_ufw(source, input_fn=None, run=None):
+def _monitor_log_file(arguments):
+    for index, argument in enumerate(arguments):
+        if argument == "--log-file" and index + 1 < len(arguments):
+            return arguments[index + 1]
+        if argument.startswith("--log-file="):
+            return argument.split("=", 1)[1]
+    return None
+
+
+def _prepare_linux_ufw(source, input_fn=None, run=None, log_file=None):
     if sys.platform != "linux" or source != "ufw":
         return True
     input_fn = (
@@ -542,10 +552,9 @@ def _prepare_linux_ufw(source, input_fn=None, run=None):
         return False
     status_text = f"{status.stdout or ''}\n{status.stderr or ''}"
     logging_enabled = re.search(r"(?im)^\s*logging:\s*on\b", status_text)
-    log_path = Path("/var/log/ufw.log")
-    if not logging_enabled or not log_path.exists():
+    if not logging_enabled:
         answer = input_fn(
-            "UFW logging may be off or its log is missing. Enable UFW logging "
+            "UFW logging is off or its status is unavailable. Enable UFW logging "
             "with sudo? This does not enable the firewall. [y/N] "
         ).strip().lower()
         if answer not in {"y", "yes"}:
@@ -555,6 +564,10 @@ def _prepare_linux_ufw(source, input_fn=None, run=None):
                 file=sys.stderr,
             )
             return False
+    log_path = Path(log_file).expanduser() if log_file else Path(
+        default_log_file("ufw")
+    )
+    if not logging_enabled:
         try:
             result = run(["sudo", ufw, "logging", "on"], check=False)
         except OSError as error:
@@ -567,6 +580,15 @@ def _prepare_linux_ufw(source, input_fn=None, run=None):
                 file=sys.stderr,
             )
             return False
+    if not log_path.exists():
+        print(
+            f"{YELLOW}Live monitor not started:{RESET} UFW logging is enabled, "
+            f"but no log file is available at {log_path}. Configure rsyslog or "
+            "provide a readable UFW log with --log-file; the console will remain "
+            "available without live ingestion.",
+            file=sys.stderr,
+        )
+        return False
     return True
 
 
@@ -596,6 +618,8 @@ def _show_cli_help():
         "Open console without live ingestion\n"
         f"{BLUE}│{RESET} {CYAN}sentinel --source SOURCE{RESET}           "
         "Choose ufw, windows-firewall, macos-unified, suricata, or zeek\n"
+        f"{BLUE}│{RESET} {CYAN}google QUESTION{RESET}                   "
+        "Search Google with a natural-language question\n"
         f"{BLUE}│{RESET} {CYAN}sentinel monitor --help{RESET}            "
         "Show detector thresholds and log options\n"
         f"{BLUE}│{RESET} {CYAN}sentinel logs PATH{RESET}                  "
@@ -611,8 +635,9 @@ def _show_cli_help():
         f"{BLUE}│{RESET} {CYAN}--no-animation{RESET}                      "
         "Disable startup animation\n"
         f"{BLUE}╰{'─' * 61}{RESET}\n"
-        f"{DIM}Linux install: sh install_sentinel.sh. Sentinel does not enable "
-        "the firewall. Online research asks before each question.{RESET}\n"
+        f"{DIM}Linux start: ./sentinel. Sentinel does not enable the firewall. "
+        "Ask a question or use 'google QUESTION'; Sentinel asks "
+        "before each Google Search.{RESET}\n"
         f"{DIM}Search results can be wrong or incomplete; Sentinel does not "
         "guarantee factual accuracy.{RESET}"
     )
@@ -724,6 +749,12 @@ class Sentinel:
                 self._run_report_command(
                     command_handlers[lowered_tokens[0]], handler_args
                 )
+        elif lowered_tokens and lowered_tokens[0] == "google":
+            query = " ".join(tokens[1:]).strip()
+            if query:
+                self._online_lookup(query)
+            else:
+                print("Sentinel: Use 'google QUESTION' to search Google.")
         elif lowered_tokens[:2] == ["analyze", "logs"]:
             self._run_report_command(logs_main, tokens[2:])
         elif lowered_tokens[:2] == ["analyze", "evidence"]:
@@ -765,6 +796,10 @@ class Sentinel:
                         f"{event.get('source')} | {event.get('event')} | "
                         f"{incident_id}"
                     )
+        elif self._is_natural_question(command) and not any(
+            word in lowered_tokens for word in ("alert", "incident")
+        ):
+            self._conversational_answer(command)
         elif intent == "explain" or (
             any(word in lowered_tokens for word in ("incident", "alert"))
             and any(word in lowered_tokens for word in ("explain", "why", "analyze", "analysis"))
@@ -832,6 +867,9 @@ class Sentinel:
 
     def _conversational_answer(self, query):
         retrieved = self.agent.answer(query)["documents"]
+        use_web_search = (
+            self._is_natural_question(query) or self._requests_current_web(query)
+        )
         local_context = "\n\n".join(
             f"[{item['document']}]\n{item['excerpt']}"
             for item in retrieved
@@ -848,11 +886,18 @@ class Sentinel:
             else:
                 self._show_online_setup()
             return
-        consent_text = (
-            "Send this question, up to 8 recent chat turns, and relevant local "
-            "guidance to Gemini? The question is sent externally; no alerts or "
-            "log contents are attached. [y/N] "
-        )
+        if use_web_search:
+            consent_text = (
+                "Send this question and up to 4 recent chat turns to Gemini "
+                "for Google Search? The request is sent externally; no alerts "
+                "or log contents are attached. [y/N] "
+            )
+        else:
+            consent_text = (
+                "Send this question, up to 8 recent chat turns, and relevant "
+                "local guidance to Gemini? The question is sent externally; "
+                "no alerts or log contents are attached. [y/N] "
+            )
         try:
             consent = _prompt_input(consent_text).strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -861,7 +906,7 @@ class Sentinel:
             print("Chat request cancelled; nothing was sent.")
             return
 
-        if self._requests_current_web(query):
+        if use_web_search:
             history_context = "\n".join(
                 f"{turn['role']}: {turn['text']}"
                 for turn in list(self.chat_history)[-4:]
@@ -1103,7 +1148,8 @@ class Sentinel:
             ("status", "Show recorded incident and alert status"),
             ("features", "Clear the screen and show integrated features + report panel"),
             ("report", "Show the latest non-secret report"),
-            ("ask a question", "Chat naturally; follow-ups use temporary conversation history"),
+            ("ask a question", "Search Google with citations after external-sharing consent"),
+            ("google QUESTION", "Search Google and show cited sources after consent"),
             ("alerts / recent", "Show evidence and recommended investigation steps"),
             ("explain", "Highlight the latest alert and explain recorded evidence"),
             ("logs PATH", "Summarize one local text log"),
@@ -1237,7 +1283,24 @@ def main():
     monitor_ready = not args.no_monitor
     if not args.no_monitor:
         requested_source = _monitor_source(monitor_options)
-        monitor_ready = _prepare_linux_ufw(requested_source)
+        monitor_ready = _prepare_linux_ufw(
+            requested_source,
+            log_file=_monitor_log_file(monitor_options),
+        )
+    sentinel = Sentinel(os.path.expanduser(args.alert_file), args.database_file)
+    try:
+        sentinel.load_existing()
+        watcher = threading.Thread(target=sentinel.watch, daemon=True)
+        watcher.start()
+        banner()
+        scan_animation(enabled=not args.no_animation)
+        loading("Loading ML and alert engine", enabled=not args.no_animation)
+        loading("Connecting local alert database", enabled=not args.no_animation)
+        if monitor_ready:
+            loading("Starting platform event monitor", enabled=not args.no_animation)
+        if sys.stdout.isatty():
+            sentinel._show_features()
+
         if monitor_ready:
             try:
                 monitor = subprocess.Popen(
@@ -1266,31 +1329,14 @@ def main():
                     f"{RED}Could not start the Sentinel monitor:{RESET} {error}",
                     file=sys.stderr,
                 )
-    sentinel = Sentinel(os.path.expanduser(args.alert_file), args.database_file)
-    try:
-        if monitor:
-            monitor_thread = threading.Thread(
-                target=_relay_monitor_output,
-                args=(monitor, sentinel.stop),
-                daemon=True,
+        if monitor and monitor.poll() is not None:
+            _relay_monitor_output(monitor, sentinel.stop)
+            monitor_ready = False
+            print(
+                f"{RED}The live monitor exited during startup; the console "
+                "remains available without live ingestion.{RESET}"
             )
-            monitor_thread.start()
-        sentinel.load_existing()
-        watcher = threading.Thread(target=sentinel.watch, daemon=True)
-        watcher.start()
-        banner()
-        scan_animation(enabled=not args.no_animation)
-        loading("Loading ML and alert engine", enabled=not args.no_animation)
-        loading("Connecting local alert database", enabled=not args.no_animation)
-        if monitor_ready:
-            loading("Starting platform event monitor", enabled=not args.no_animation)
-            if monitor and monitor.poll() is not None:
-                monitor_ready = False
-                print(
-                    f"{RED}The live monitor exited during startup; the console "
-                    "remains available without live ingestion.{RESET}"
-                )
-        elif not args.no_monitor:
+        elif not monitor_ready and not args.no_monitor:
             print(
                 f"{YELLOW}Console-only mode:{RESET} no live event source was started."
             )
@@ -1298,9 +1344,19 @@ def main():
             state = "Sentinel is online"
         else:
             state = "Sentinel console is ready"
-        if sys.stdout.isatty():
-            sentinel._show_features()
         print(f"{GREEN}{state}{RESET}. Type {YELLOW}'help'{RESET} for commands.")
+        print(
+            f"{DIM}Ask anything as a question; Sentinel will search Google "
+            "after you confirm. Type 'google QUESTION' to search directly, "
+            f"or 'help' for commands.{RESET}"
+        )
+        if monitor and monitor_ready:
+            monitor_thread = threading.Thread(
+                target=_relay_monitor_output,
+                args=(monitor, sentinel.stop),
+                daemon=True,
+            )
+            monitor_thread.start()
         while sentinel.answer(_prompt_input()):
             pass
     except (KeyboardInterrupt, EOFError):

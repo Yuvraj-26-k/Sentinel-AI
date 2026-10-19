@@ -437,7 +437,15 @@ def resolve_source(source):
 
 def default_log_file(source):
     if source == "ufw":
-        return "/var/log/ufw.log"
+        candidates = (
+            "/var/log/ufw.log",
+            "/var/log/kern.log",
+            "/var/log/syslog",
+        )
+        return next(
+            (path for path in candidates if os.path.isfile(path)),
+            candidates[0],
+        )
     if source == "windows-firewall":
         root = os.environ.get("SystemRoot", r"C:\Windows")
         return os.path.join(root, "System32", "LogFiles", "Firewall", "pfirewall.log")

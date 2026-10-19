@@ -72,6 +72,16 @@ class EventAdapterTests(unittest.TestCase):
         self.assertEqual(event["destination_port"], 443)
         self.assertEqual(event["action"], "block")
 
+    def test_ufw_default_log_uses_available_kernel_or_system_log(self):
+        with patch(
+            "telemetry.os.path.isfile",
+            side_effect=lambda path: path == "/var/log/kern.log",
+        ):
+            self.assertEqual(
+                telemetry.default_log_file("ufw"),
+                "/var/log/kern.log",
+            )
+
     def test_windows_firewall_w3c_header_and_record(self):
         adapter = windows_firewall_adapter.WindowsFirewallAdapter()
         ingestion._prime_parser(
@@ -959,7 +969,7 @@ class SentinelUiTests(unittest.TestCase):
             self.assertEqual(sentinel_main(), 5)
         password_command.assert_called_once_with(["generate"])
 
-    def test_interactive_assistant_routes_tools_and_explains_model_scope(self):
+    def test_interactive_assistant_routes_tools_and_natural_questions(self):
         with tempfile.TemporaryDirectory() as directory:
             terminal = Sentinel(
                 str(Path(directory, "alerts.jsonl")),
@@ -981,7 +991,7 @@ class SentinelUiTests(unittest.TestCase):
 
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     self.assertTrue(terminal.answer("does the ML know general facts?"))
-                self.assertIn("not a general-purpose language model", stdout.getvalue())
+                self.assertIn("Google Search is an optional feature", stdout.getvalue())
 
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     self.assertTrue(terminal.answer("help"))
@@ -1060,6 +1070,57 @@ class SentinelUiTests(unittest.TestCase):
                 if terminal.store:
                     terminal.store.engine.dispose()
 
+    def test_ordinary_natural_question_uses_google_search(self):
+        query = "Explain DNSSEC"
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch(
+                        "sentinel.web_research",
+                        return_value={"answer": "A network filter.", "sources": []},
+                    ) as research,
+                    patch("builtins.input", side_effect=("yes", "no")),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertTrue(terminal.answer(query))
+                research.assert_called_once_with(query)
+                self.assertIn("A network filter.", terminal.latest_report)
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_google_command_searches_the_supplied_question(self):
+        query = "Explain DNSSEC"
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch(
+                        "sentinel.web_research",
+                        return_value={
+                            "answer": "DNSSEC authenticates DNS data.",
+                            "sources": [],
+                        },
+                    ) as research,
+                    patch("builtins.input", side_effect=("yes", "no")),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertTrue(terminal.answer(f"google {query}"))
+                research.assert_called_once_with(query)
+                self.assertIn("DNSSEC authenticates DNS data.", terminal.latest_report)
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
     def test_online_research_is_not_sent_without_consent(self):
         with tempfile.TemporaryDirectory() as directory:
             terminal = Sentinel(
@@ -1080,7 +1141,7 @@ class SentinelUiTests(unittest.TestCase):
                 if terminal.store:
                     terminal.store.engine.dispose()
 
-    def test_conversational_llm_receives_bounded_history_and_retrieval_after_consent(self):
+    def test_natural_question_search_uses_recent_history_after_consent(self):
         with tempfile.TemporaryDirectory() as directory:
             terminal = Sentinel(
                 str(Path(directory, "alerts.jsonl")),
@@ -1096,28 +1157,20 @@ class SentinelUiTests(unittest.TestCase):
                 with (
                     patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
                     patch(
-                        "sentinel.chat_with_gemini",
-                        return_value="A natural conversational reply.",
-                    ) as chat,
-                    patch("builtins.input", return_value="yes"),
+                        "sentinel.web_research",
+                        return_value={"answer": "A grounded response.", "sources": []},
+                    ) as research,
+                    patch("builtins.input", side_effect=("yes", "no")),
                     patch("sentinel.Sentinel._offer_save_report"),
                     patch("sys.stdout", new_callable=io.StringIO),
                 ):
                     self.assertTrue(
-                        terminal.answer("And how does an Nmap SYN scan work?")
+                        terminal.answer("What is a SYN scan?")
                     )
-                chat.assert_called_once()
-                args = chat.call_args
-                self.assertIn("Nmap", args.args[0])
-                self.assertEqual(
-                    args.kwargs["history"],
-                    [
-                        {"role": "user", "text": "Earlier question"},
-                        {"role": "assistant", "text": "Earlier answer"},
-                    ],
-                )
-                self.assertIn("SYN scan", args.kwargs["context"])
-                self.assertIn("A natural conversational reply.", terminal.latest_report)
+                research.assert_called_once()
+                self.assertIn("Earlier question", research.call_args.args[0])
+                self.assertIn("What is a SYN scan?", research.call_args.args[0])
+                self.assertIn("A grounded response.", terminal.latest_report)
                 self.assertEqual(len(terminal.chat_history), 4)
             finally:
                 if terminal.store:
@@ -1204,12 +1257,21 @@ class SentinelUiTests(unittest.TestCase):
         process.stdout = io.StringIO()
         terminal = Mock()
         terminal.stop = threading.Event()
+        startup_events = []
+
+        def launch_monitor(*args, **kwargs):
+            startup_events.append("monitor")
+            return process
+
+        def show_loading(*args, **kwargs):
+            startup_events.append("loading")
+
         with (
-            patch("sentinel.subprocess.Popen", return_value=process) as launch,
+            patch("sentinel.subprocess.Popen", side_effect=launch_monitor) as launch,
             patch("sentinel.Sentinel", return_value=terminal),
             patch("sentinel.banner"),
             patch("sentinel.scan_animation"),
-            patch("sentinel.loading"),
+            patch("sentinel.loading", side_effect=show_loading),
             patch("builtins.input", side_effect=EOFError),
             patch.object(sys, "argv", ["sentinel", "--source", "ufw"]),
         ):
@@ -1220,6 +1282,8 @@ class SentinelUiTests(unittest.TestCase):
             command[:5], [sys.executable, "-u", "-m", "sentinel", "monitor"]
         )
         self.assertIn("--source", command)
+        self.assertEqual(startup_events[-1], "monitor")
+        self.assertGreater(startup_events.count("loading"), 0)
         process.terminate.assert_called_once_with()
         process.wait.assert_called_once_with(timeout=5)
 
@@ -1435,7 +1499,7 @@ class SentinelUiTests(unittest.TestCase):
             patch("sentinel.sys.platform", "linux"),
             patch("sentinel.sys.stdin.isatty", return_value=True),
             patch("sentinel.shutil.which", side_effect=which),
-            patch("sentinel.Path.exists", return_value=False),
+            patch("sentinel.Path.exists", return_value=True),
         ):
             answers = iter(("yes", "yes"))
             self.assertTrue(
@@ -1449,6 +1513,31 @@ class SentinelUiTests(unittest.TestCase):
                 ["sudo", "/usr/sbin/ufw", "logging", "on"],
             ],
         )
+
+    def test_ufw_enabled_without_any_log_file_stays_in_console_mode(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+
+        run = Mock(
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout="Logging: on",
+                stderr="",
+            )
+        )
+        with (
+            patch("sentinel.sys.platform", "linux"),
+            patch("sentinel.sys.stdin.isatty", return_value=True),
+            patch("sentinel.shutil.which", side_effect=lambda name: {
+                "ufw": "/usr/sbin/ufw",
+            }.get(name)),
+            patch("sentinel.default_log_file", return_value="/var/log/ufw.log"),
+            patch("sentinel.Path.exists", return_value=False),
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            self.assertFalse(_prepare_linux_ufw("ufw", run=run))
+        run.assert_called_once()
+        self.assertIn("no log file is available", stderr.getvalue())
 
     def test_google_search_grounding_parses_answer_and_https_citations(self):
         response = unittest.mock.Mock()
