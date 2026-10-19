@@ -234,6 +234,69 @@ def chat(message, context=""):
         f"\nLocal context: {context}\nUser: {message}"
     )
 
+
+def web_research(query):
+    """Ask Gemini to search the web and return its answer with URL citations."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "online research requires GEMINI_API_KEY; no question was sent"
+        )
+    query = query.strip()
+    if not query or len(query) > 4000:
+        raise ValueError("online research questions must contain 1 to 4000 characters")
+
+    model = os.getenv("GEMINI_WEB_MODEL", "gemini-3.8-flash")
+    response = requests.post(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        headers={"x-goog-api-key": api_key},
+        json={
+            "model": model,
+            "input": (
+                "Answer the user's question using Google Search results. "
+                "Distinguish sourced facts from uncertainty, mention when evidence "
+                "is conflicting or insufficient, and never claim guaranteed accuracy.\n\n"
+                f"Question: {query}"
+            ),
+            "tools": [{"type": "google_search"}],
+        },
+        timeout=45,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    answer_parts = []
+    sources = []
+    seen_urls = set()
+    for step in payload.get("steps", []):
+        if not isinstance(step, dict) or step.get("type") != "model_output":
+            continue
+        for block in step.get("content", []):
+            if not isinstance(block, dict) or block.get("type") != "text":
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                answer_parts.append(text.strip())
+            for annotation in block.get("annotations", []):
+                if not isinstance(annotation, dict):
+                    continue
+                url = annotation.get("url")
+                if (
+                    annotation.get("type") == "url_citation"
+                    and isinstance(url, str)
+                    and url.startswith("https://")
+                    and url not in seen_urls
+                ):
+                    seen_urls.add(url)
+                    title = annotation.get("title")
+                    sources.append(
+                        {"title": title if isinstance(title, str) else url, "url": url}
+                    )
+    answer = "\n\n".join(answer_parts)
+    if not answer:
+        raise RuntimeError("online research returned no answer text")
+    return {"answer": answer, "sources": sources}
+
+
 # --- rag_agent.py ---
 #!/usr/bin/env python3
 """Local RAG + agentic security analyst for the Nmap detector.

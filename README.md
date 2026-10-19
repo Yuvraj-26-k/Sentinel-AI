@@ -22,6 +22,9 @@ an attack.
   aggregation, event timelines, source health, and restart recovery.
 - **Evidence-grounded analysis:** local triage guidance and optional Gemini
   analysis can only surface alert evidence and approved investigation steps.
+- **Optional online research:** Gemini Google Search grounding returns source
+  links; Sentinel asks before each external query. Answers can be incomplete,
+  and no AI can guarantee 100% factual accuracy.
 - **Opt-in file utilities:** coarse analysis of one local text log and
   non-recursive metadata collection for selected evidence-file extensions,
   plus streaming SHA-2 file hashing.
@@ -39,7 +42,7 @@ an attack.
 - Python 3.10 or newer
 - Internet access for the initial dependency installation
 - Permission to read the selected firewall or sensor log
-- Optional: `GEMINI_API_KEY` for cloud-assisted explanations
+- Optional: `GEMINI_API_KEY` for user-approved online search and cloud analysis
 
 ## Installation
 
@@ -50,19 +53,22 @@ git clone https://github.com/Yuvraj-26-k/Sentinel-AI.git
 cd Sentinel-AI
 ```
 
-Create a virtual environment and install Sentinel once. Installation includes
-the dependencies and adds the `sentinel` command to the active environment's
-PATH. Afterward, activate that environment and type `sentinel` to start both
-the event monitor and interactive console.
+On Linux, install the `sentinel` command once:
 
 ### Linux
 
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
+sh install_sentinel.sh
 ```
+
+This creates `.venv`, installs the project, and installs a user-level `sentinel`
+launcher in `~/.local/bin`. Manual environment activation is not required. If
+`~/.local/bin` is missing from `PATH`, the installer asks before adding it to
+`~/.profile`; open a new shell afterward. If you decline, use the printed
+`export` command for that shell. After pulling source updates, re-run the
+installer if project dependencies changed. It does not fetch Git updates or
+run system package commands. The first interactive launch opens the feature
+dashboard and latest-report panel.
 
 On first launch with the default UFW source, Sentinel checks whether UFW and
 its log are available. If UFW is missing, it offers to install it using the
@@ -117,16 +123,17 @@ installed and accessible; Sysmon is optional.
 
 ## Run Sentinel
 
-Activate the virtual environment from the installation steps, then start the
-monitor and live alert console together with one command:
+After installing the project for your platform, start the monitor and live
+alert console with one command:
 
 ```sh
 sentinel
 ```
 
-On Linux and macOS, activate with `source .venv/bin/activate`. In Windows
-PowerShell, activate with `.\.venv\Scripts\Activate.ps1`; if script activation
-is restricted, run `.\.venv\Scripts\sentinel.exe`. The automatic monitor uses
+On Linux, use the user-level launcher installed above. On macOS and Windows,
+activate the virtual environment from the installation steps; in Windows
+PowerShell, if script activation is restricted, run
+`.\.venv\Scripts\sentinel.exe`. The automatic monitor uses
 the platform's default source: UFW on Linux, Windows Filtering Platform on
 Windows, and unified logs on macOS. One `Ctrl+C` or `quit` stops the console
 and its monitor. Use `sentinel --no-monitor` to open only the console.
@@ -144,6 +151,8 @@ The console accepts these commands:
 | `collect DIRECTORY` | List evidence-file metadata; optionally save a report |
 | `hash FILE` | Print a SHA-2 digest without printing file contents |
 | `password generate` / `password check` | Generate or check a secret interactively |
+| `features` | Clear the screen and show features with a latest-report panel |
+| `report` | Show the latest non-secret report |
 | `help` | Show commands |
 | `quit` | Exit the console |
 
@@ -152,6 +161,22 @@ File-tool commands can also be run directly as `sentinel logs ...`,
 requests such as `analyze logs "path with spaces"` and `collect evidence
 "directory"` route to these same local commands. `analyze alert` and `explain`
 show the newest alert using its recorded evidence.
+
+Interactive file analysis, hashing, explanations, and online answers ask before
+saving a report under `~/.sentinel/reports/`; decline to keep it on screen only.
+Generated passwords are never included in saved reports. `features` shows a
+two-panel overview; its feature list does not show scan history.
+
+### Online research and privacy
+
+Set `GEMINI_API_KEY` and, optionally, `GEMINI_WEB_MODEL` to enable current web
+research through Gemini Google Search grounding. For each free-form online
+question, Sentinel asks before sending that question to Google/Gemini. It does
+not attach alerts or local logs to a web-research query. `explain` separately
+asks before sending alert telemetry for cloud evidence selection. Answers show
+available citations and an uncertainty warning; search coverage, sources, and
+model output can be wrong or incomplete, so verify important information with
+primary sources. Without a key, local monitoring and tools continue to work.
 
 ### Analyze logs and collect evidence files
 

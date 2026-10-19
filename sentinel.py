@@ -1,6 +1,8 @@
 import argparse
+import contextlib
 import getpass
 import hashlib
+import io
 import ipaddress
 import json
 import os
@@ -12,18 +14,20 @@ import stat
 import string
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from analyst import (
     AlertStore,
     analyst_main,
-    chat as chat_with_gemini,
     explain_alert as explain_with_gemini,
     format_analysis,
     local_analysis,
     verified_ai_analysis,
+    web_research,
 )
 from detection import detector_main
 
@@ -573,11 +577,15 @@ def _show_cli_help():
         "Stream a SHA-2 file digest\n"
         f"{BLUE}│{RESET} {CYAN}sentinel password generate|check{RESET}    "
         "Use local password utilities\n"
+        f"{BLUE}│{RESET} {CYAN}features / report{RESET}                  "
+        "Show integrated features or the latest report\n"
         f"{BLUE}│{RESET} {CYAN}--no-animation{RESET}                      "
         "Disable startup animation\n"
         f"{BLUE}╰{'─' * 61}{RESET}\n"
-        f"{DIM}Linux UFW installation and logging setup are opt-in. "
-        "Sentinel does not enable the firewall.{RESET}"
+        f"{DIM}Linux install: sh install_sentinel.sh. Sentinel does not enable "
+        "the firewall. Online research asks before each question.{RESET}\n"
+        f"{DIM}Search results can be wrong or incomplete; Sentinel does not "
+        "guarantee factual accuracy.{RESET}"
     )
 
 
@@ -588,6 +596,7 @@ class Sentinel:
         self.alerts = deque(maxlen=50)
         self.stop = threading.Event()
         self.position = 0
+        self.latest_report = ""
 
     def load_existing(self):
         try:
@@ -668,14 +677,23 @@ class Sentinel:
             if lowered_tokens[0] == "collect" and handler_args:
                 if handler_args[0].lower() == "evidence":
                     handler_args = handler_args[1:]
-            self._run_cli_handler(command_handlers[lowered_tokens[0]], handler_args)
+            if lowered_tokens[0] == "password":
+                self._run_cli_handler(
+                    command_handlers[lowered_tokens[0]], handler_args
+                )
+            else:
+                self._run_report_command(
+                    command_handlers[lowered_tokens[0]], handler_args
+                )
         elif lowered_tokens[:2] == ["analyze", "logs"]:
-            self._run_cli_handler(logs_main, tokens[2:])
+            self._run_report_command(logs_main, tokens[2:])
         elif lowered_tokens[:2] == ["analyze", "evidence"]:
-            self._run_cli_handler(collect_main, tokens[2:])
+            self._run_report_command(collect_main, tokens[2:])
         elif lowered_tokens and lowered_tokens[0] == "analyze":
             if len(tokens) > 1 and tokens[1].startswith("--"):
                 self._run_cli_handler(analyst_main, tokens[1:])
+            elif len(tokens) > 1 and lowered_tokens[1] != "alert":
+                self._online_lookup(" ".join(tokens[1:]))
             else:
                 self._explain_latest()
         elif normalized in {"analysis", "analyze alert", "alert analysis"}:
@@ -684,7 +702,12 @@ class Sentinel:
             "help", "?", "commands", "what can you do", "capabilities",
         } or "help" in normalized:
             self._show_help()
+        elif normalized in {"features", "feature", "menu", "home"}:
+            self._show_features()
+        elif normalized in {"report", "reports", "show report"}:
+            self._show_report()
         elif normalized in {"status", "what happened", "what happened?", "recent", "alerts"}:
+            self._clear_screen()
             stored = self.store.recent(5) if self.store else []
             if not self.alerts and not stored:
                 print("Sentinel: No scan alerts recorded yet.")
@@ -701,7 +724,15 @@ class Sentinel:
                     )
         elif any(word in normalized for word in ("explain", "incident", "alert")):
             self._explain_latest()
-        elif any(word in normalized for word in ("scan", "monitor", "detect")):
+        elif any(
+            phrase in normalized
+            for phrase in (
+                "scan detection",
+                "how does sentinel detect",
+                "how do i configure detection",
+                "monitor status",
+            )
+        ):
             self._show_scan_guidance()
         elif any(word in normalized for word in ("log", "logs")):
             print("Sentinel: For file-level log statistics and indicators, run "
@@ -713,16 +744,45 @@ class Sentinel:
         elif any(word in normalized for word in ("model", "machine learning", "anomaly", "ml ")):
             self._show_analysis_scope()
         else:
-            context = "No alert yet." if not self.alerts else repr(self.alerts[-1])
-            try:
-                answer = chat_with_gemini(command, context) if chat_with_gemini else None
-            except Exception as error:
-                answer = f"Cloud assistant unavailable ({type(error).__name__})."
-            if answer:
-                print(f"{CYAN}Sentinel Gemini{RESET}: {answer}")
-            else:
-                self._show_analysis_scope()
+            self._online_lookup(command)
         return True
+
+    def _online_lookup(self, query):
+        if not os.getenv("GEMINI_API_KEY"):
+            self._show_online_setup()
+            return
+        try:
+            consent = input(
+                "Send this question to Gemini with Google Search? "
+                "The question is sent externally; no alert or log data is attached. [y/N] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            consent = ""
+        if consent not in {"y", "yes"}:
+            print("Online lookup cancelled; the question was not sent.")
+            return
+        try:
+            result = web_research(query)
+        except Exception as error:
+            print(f"{RED}Online research failed:{RESET} {error}")
+            return
+        lines = [
+            "Online research (may be incomplete or incorrect; verify important claims):",
+            result["answer"],
+        ]
+        if result["sources"]:
+            lines.append("Sources:")
+            lines.extend(
+                f"- {source['title']}: {source['url']}"
+                for source in result["sources"]
+            )
+        else:
+            lines.append(
+                "No source citations were returned; treat this answer as unverified."
+            )
+        self.latest_report = "\n".join(lines)
+        self._show_report()
+        self._offer_save_report()
 
     @staticmethod
     def _run_cli_handler(handler, args):
@@ -731,9 +791,137 @@ class Sentinel:
         except SystemExit:
             pass
 
+    def _run_report_command(self, handler, args):
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                handler(args)
+        except SystemExit:
+            pass
+        report = output.getvalue().strip()
+        if not report:
+            return
+        self.latest_report = report
+        print(report)
+        if not any(argument == "--output" or argument.startswith("--output=") for argument in args):
+            self._offer_save_report()
+
+    def _offer_save_report(self):
+        if not self.latest_report:
+            return
+        reports_directory = Path.home() / ".sentinel" / "reports"
+        filename = f"report-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.txt"
+        destination = reports_directory / filename
+        try:
+            answer = input(
+                f"Save this report to {destination}? [y/N] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in {"y", "yes"}:
+            print("Report not saved.")
+            return
+        try:
+            reports_directory.mkdir(parents=True, exist_ok=True)
+            with destination.open("x", encoding="utf-8") as report_file:
+                report_file.write(self.latest_report)
+                report_file.write("\n")
+        except OSError as error:
+            print(f"{RED}Could not save report:{RESET} {error}")
+            return
+        print(f"{GREEN}Report saved:{RESET} {destination}")
+
+    def _show_report(self):
+        self._clear_screen()
+        if self.latest_report:
+            print(f"{MAGENTA}╭─ LATEST REPORT {'─' * 48}{RESET}")
+            print(self.latest_report)
+            print(f"{MAGENTA}╰{'─' * 62}{RESET}")
+        else:
+            print("No report generated yet. Run logs, collect, hash, or online research.")
+
+    @staticmethod
+    def _clear_screen():
+        if sys.stdout.isatty():
+            print("\033[2J\033[H", end="")
+
+    def _show_features(self):
+        self._clear_screen()
+        feature_rows = (
+            "Cross-platform normalized telemetry",
+            "Vertical, horizontal, slow, SYN and failure scan rules",
+            "Behavioral anomaly scoring with Isolation Forest",
+            "Incident aggregation, SQLite history and duplicate handling",
+            "Evidence-backed explanations and investigation steps",
+            "Local log statistics and validated IP indicators",
+            "Evidence-file metadata collection",
+            "Streaming SHA-2 file hashing",
+            "Secure one-time password generation and checks",
+            "Google Search research (asks before sending)",
+        )
+        width = max(80, min(shutil.get_terminal_size((100, 24)).columns, 120))
+        left_width = max(35, width // 2 - 5)
+        right_width = max(28, width - left_width - 9)
+        report_lines = self.latest_report.splitlines() if self.latest_report else [
+            "No report yet.",
+            "Run logs, collect, hash, explain,",
+            "or ask an online research question.",
+            "Saving always requires confirmation.",
+        ]
+        print(f"{CYAN}SENTINEL • INTEGRATED FEATURES{RESET}")
+        feature_content = []
+        for feature in feature_rows:
+            feature_content.extend(
+                textwrap.wrap(f"> {feature}", width=left_width - 2) or [">"]
+            )
+        report_content = []
+        for line in report_lines:
+            report_content.extend(textwrap.wrap(line, width=right_width - 2) or [""])
+        feature_header = "┌" + "─" * (left_width - 2) + "┐"
+        report_header = "┌" + "─" * (right_width - 2) + "┐"
+        print(f"{BLUE}{feature_header}   {report_header}{RESET}")
+        feature_title = " FEATURES "
+        report_title = " LATEST REPORT "
+        print(
+            f"{BLUE}│{CYAN}{feature_title:<{left_width - 2}}{BLUE}│   "
+            f"│{MAGENTA}{report_title:<{right_width - 2}}{BLUE}│{RESET}"
+        )
+        print(
+            f"{BLUE}{'├' + '─' * (left_width - 2) + '┤'}   "
+            f"{'├' + '─' * (right_width - 2) + '┤'}{RESET}"
+        )
+        rows = max(len(feature_content), len(report_content), 1)
+        for index in range(rows):
+            feature = feature_content[index] if index < len(feature_content) else ""
+            report = report_content[index] if index < len(report_content) else ""
+            print(
+                f"{BLUE}│{CYAN} {feature:<{left_width - 3}}{BLUE}│   "
+                f"│{MAGENTA} {report:<{right_width - 3}}{BLUE}│{RESET}"
+            )
+        print(
+            f"{BLUE}{'└' + '─' * (left_width - 2) + '┘'}   "
+            f"{'└' + '─' * (right_width - 2) + '┘'}{RESET}"
+        )
+        print(
+            f"\n{DIM}Commands: status (alerts) · features · report · help · quit"
+            f"{RESET}"
+        )
+
+    @staticmethod
+    def _show_online_setup():
+        if os.getenv("GEMINI_API_KEY"):
+            print("Online research is unavailable because no compatible web-search response was returned.")
+        else:
+            print(
+                "Online research needs a Gemini API key with Google Search grounding. "
+                "Set GEMINI_API_KEY and GEMINI_WEB_MODEL if you want to enable it."
+            )
+
     def _show_help(self):
         rows = (
-            ("status", "Show recent incidents and monitor health"),
+            ("status", "Show recorded incident and alert status"),
+            ("features", "Clear the screen and show integrated features + report panel"),
+            ("report", "Show the latest non-secret report"),
             ("alerts / recent", "Show evidence and recommended investigation steps"),
             ("explain", "Highlight the latest alert and explain recorded evidence"),
             ("logs PATH", "Summarize one local text log"),
@@ -780,15 +968,23 @@ class Sentinel:
         event = self.alerts[-1]
         analysis = local_analysis(event)
         print("Sentinel evidence-bound analysis:\n" + format_analysis(analysis))
-        try:
-            proposal = explain_with_gemini(event) if explain_with_gemini else None
-            ai_analysis = verified_ai_analysis(event, proposal)
-        except Exception as error:
-            ai_analysis = None
-            print(
-                f"Gemini unavailable ({type(error).__name__}); "
-                "using local evidence only."
-            )
+        ai_analysis = None
+        if explain_with_gemini and os.getenv("GEMINI_API_KEY"):
+            try:
+                consent = input(
+                    "Send this alert's telemetry fields to Gemini for evidence selection? [y/N] "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                consent = ""
+            if consent in {"y", "yes"}:
+                try:
+                    proposal = explain_with_gemini(event)
+                    ai_analysis = verified_ai_analysis(event, proposal)
+                except Exception as error:
+                    print(
+                        f"Gemini unavailable ({type(error).__name__}); "
+                        "using local evidence only."
+                    )
         if ai_analysis:
             print("AI-selected verified evidence:")
             for item in ai_analysis["observations"]:
@@ -797,7 +993,14 @@ class Sentinel:
                 print("AI-selected approved investigation steps:")
                 for step in ai_analysis["investigation_steps"]:
                     print(f"- {step}")
+        report = "\n".join((
+            "Sentinel evidence-bound analysis:",
+            format_analysis(analysis),
+            self.render(event),
+        ))
         print(self.render(event))
+        self.latest_report = report
+        self._offer_save_report()
 
 
 def main():
@@ -901,6 +1104,8 @@ def main():
             state = "Sentinel is online"
         else:
             state = "Sentinel console is ready"
+        if sys.stdout.isatty():
+            sentinel._show_features()
         print(f"{GREEN}{state}{RESET}. Type {YELLOW}'help'{RESET} for commands.")
         while sentinel.answer(input("sentinel> ")):
             pass

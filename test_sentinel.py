@@ -922,6 +922,106 @@ class SentinelUiTests(unittest.TestCase):
                 if terminal.store:
                     terminal.store.engine.dispose()
 
+    def test_online_research_requires_consent_and_offers_cited_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch(
+                        "sentinel.web_research",
+                        return_value={
+                            "answer": "A sourced answer.",
+                            "sources": [
+                                {"title": "Primary source", "url": "https://example.org"}
+                            ],
+                        },
+                    ) as research,
+                    patch("builtins.input", side_effect=("yes", "n")),
+                    patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                ):
+                    self.assertTrue(terminal.answer("What is a SYN scan?"))
+                research.assert_called_once_with("What is a SYN scan?")
+                self.assertIn("https://example.org", terminal.latest_report)
+                self.assertIn("may be incomplete or incorrect", stdout.getvalue())
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_online_research_is_not_sent_without_consent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch("sentinel.web_research") as research,
+                    patch("builtins.input", return_value="no"),
+                    patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                ):
+                    self.assertTrue(terminal.answer("Search for a security topic"))
+                research.assert_not_called()
+                self.assertIn("question was not sent", stdout.getvalue())
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_feature_dashboard_clears_screen_and_shows_report_panel(self):
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            terminal.latest_report = "Example saved-safe report"
+            output = TTYBuffer()
+            try:
+                with patch("sys.stdout", output):
+                    self.assertTrue(terminal.answer("features"))
+                rendered = output.getvalue()
+                self.assertIn("\033[2J\033[H", rendered)
+                self.assertIn("INTEGRATED FEATURES", rendered)
+                self.assertIn("LATEST REPORT", rendered)
+                self.assertIn("Example saved-safe report", rendered)
+                self.assertIn("> Secure one-time password", rendered)
+                self.assertNotIn("scans performed", rendered.lower())
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_report_save_requires_yes_and_uses_create_only_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                terminal.latest_report = "Non-secret report text"
+                with (
+                    patch("sentinel.Path.home", return_value=Path(directory)),
+                    patch("builtins.input", return_value="yes"),
+                    patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                ):
+                    terminal._offer_save_report()
+                saved_reports = list((Path(directory) / ".sentinel" / "reports").glob("*.txt"))
+                self.assertEqual(len(saved_reports), 1)
+                self.assertEqual(
+                    saved_reports[0].read_text(encoding="utf-8"),
+                    "Non-secret report text\n",
+                )
+                self.assertIn("Report saved:", stdout.getvalue())
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
     def test_terminal_command_starts_and_stops_monitor_automatically(self):
         from unittest.mock import Mock
         import threading
@@ -1176,6 +1276,58 @@ class SentinelUiTests(unittest.TestCase):
                 ["sudo", "/usr/sbin/ufw", "logging", "on"],
             ],
         )
+
+    def test_google_search_grounding_parses_answer_and_https_citations(self):
+        response = unittest.mock.Mock()
+        response.json.return_value = {
+            "steps": [
+                {
+                    "type": "model_output",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Grounded answer.",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "title": "Official source",
+                                    "url": "https://example.org/docs",
+                                },
+                                {
+                                    "type": "url_citation",
+                                    "title": "Unsafe source",
+                                    "url": "http://example.org/",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+        with (
+            patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+            patch("analyst.requests.post", return_value=response) as post,
+        ):
+            result = analyst.web_research("How does feature X work?")
+        self.assertEqual(result["answer"], "Grounded answer.")
+        self.assertEqual(
+            result["sources"],
+            [{"title": "Official source", "url": "https://example.org/docs"}],
+        )
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.kwargs["json"]["tools"],
+            [{"type": "google_search"}],
+        )
+
+    def test_google_search_grounding_requires_api_key_before_request(self):
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("analyst.requests.post") as post,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "GEMINI_API_KEY"):
+                analyst.web_research("test")
+        post.assert_not_called()
 
 # --- test_smart_detector.py ---
 class SmartDetectorTests(unittest.TestCase):
