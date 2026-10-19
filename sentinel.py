@@ -1,11 +1,20 @@
 import argparse
+import getpass
+import hashlib
+import ipaddress
 import json
 import os
-import sys
+import re
+import secrets
+import shlex
+import stat
+import string
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from analyst import (
     AlertStore,
     analyst_main,
@@ -16,6 +25,332 @@ from analyst import (
     verified_ai_analysis,
 )
 from detection import detector_main
+
+EVIDENCE_EXTENSIONS = {".txt", ".log", ".pdf", ".docx", ".exe", ".bat", ".ps1"}
+EMAIL_CANDIDATE_RE = re.compile(
+    r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~-])"
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+"
+    r"(?![A-Za-z0-9-])"
+)
+IP_CANDIDATE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.:])"
+    r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}"
+    r"(?![A-Za-z0-9_.:])"
+    r"|(?<![A-Za-z0-9_.:])"
+    r"(?:[0-9A-Fa-f]*:[0-9A-Fa-f:.]*[0-9A-Fa-f]|::)"
+    r"(?![A-Za-z0-9_.:])"
+)
+HASH_ALGORITHMS = ("sha224", "sha256", "sha384", "sha512")
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 256
+PASSWORD_ALPHABET = string.ascii_letters + string.digits + string.punctuation
+
+
+def analyze_log_file(path):
+    """Return a deterministic, file-level text analysis report."""
+    path = Path(path).expanduser()
+    try:
+        with path.open("rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise OSError("not a regular file")
+            raw = handle.read()
+    except OSError as error:
+        raise OSError(f"cannot read {path}: {error}") from error
+
+    text = raw.decode("utf-8", errors="replace")
+    emails = sorted(set(EMAIL_CANDIDATE_RE.findall(text)))
+    addresses = set()
+    for candidate in IP_CANDIDATE_RE.findall(text):
+        try:
+            addresses.add(str(ipaddress.ip_address(candidate)))
+        except ValueError:
+            continue
+    addresses = sorted(addresses)
+
+    lines = [
+        f"Log analysis: {os.path.abspath(path)}",
+        f"Bytes: {len(raw)}",
+        f"Lines: {len(text.splitlines())}",
+        f"Words: {len(text.split())}",
+        f"Characters: {len(text)}",
+        f"INFO substring occurrences (case-sensitive): {text.count('INFO')}",
+        f"WARNING substring occurrences (case-sensitive): {text.count('WARNING')}",
+        f"ERROR substring occurrences (case-sensitive): {text.count('ERROR')}",
+        f"Unique email candidates: {len(emails)}",
+    ]
+    lines.extend(f"  {email}" for email in emails)
+    lines.append(f"Unique validated IP addresses: {len(addresses)}")
+    lines.extend(f"  {address}" for address in addresses)
+    return "\n".join(lines)
+
+
+def collect_evidence(directory):
+    """Return a deterministic report and any directory-entry errors."""
+    directory = Path(directory).expanduser()
+    absolute_directory = Path(os.path.abspath(directory))
+    records = []
+    errors = []
+    try:
+        with os.scandir(directory) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                entry_path = Path(entry.path)
+                if entry_path.suffix not in EVIDENCE_EXTENSIONS:
+                    continue
+                try:
+                    absolute_path = Path(os.path.abspath(entry_path))
+                    metadata = entry.stat(follow_symlinks=False)
+                    if not stat.S_ISREG(metadata.st_mode):
+                        continue
+                    records.append(
+                        (entry.name, entry_path.suffix, metadata.st_size, str(absolute_path))
+                    )
+                except OSError as error:
+                    errors.append(
+                        f"{absolute_path}: {type(error).__name__}: {error}"
+                    )
+    except OSError as error:
+        errors.append(
+            f"{absolute_directory}: {type(error).__name__}: {error}"
+        )
+
+    lines = [
+        f"Evidence collection: {absolute_directory}",
+        f"Matching files: {len(records)}",
+        f"Errors: {len(errors)}",
+    ]
+    extension_counts = {}
+    for _, extension, _, _ in records:
+        extension_counts[extension] = extension_counts.get(extension, 0) + 1
+    if extension_counts:
+        lines.append(
+            "Extensions: "
+            + ", ".join(
+                f"{extension}={extension_counts[extension]}"
+                for extension in sorted(extension_counts)
+            )
+        )
+    if records:
+        lines.append("Files:")
+        lines.extend(
+            f"- {name} | {extension} | {size} bytes | {absolute_path}"
+            for name, extension, size, absolute_path in records
+        )
+    else:
+        lines.append("No matching files.")
+    if errors:
+        lines.append("Collection errors:")
+        lines.extend(f"- {error}" for error in errors)
+    return "\n".join(lines), errors
+
+
+def _resolved_path(path):
+    try:
+        return Path(path).expanduser().resolve()
+    except (OSError, RuntimeError) as error:
+        raise OSError(f"cannot resolve path {path}: {error}") from error
+
+
+def _write_report(report, output_path, protected_paths=()):
+    output = Path(output_path).expanduser()
+    try:
+        resolved_output = _resolved_path(output)
+        resolved_protected = [_resolved_path(path) for path in protected_paths]
+    except OSError as error:
+        return str(error)
+    if resolved_output in resolved_protected:
+        return f"refusing to overwrite input file: {resolved_output}"
+    try:
+        output.write_text(report + "\n", encoding="utf-8")
+    except OSError as error:
+        return f"cannot write report {output}: {error}"
+    return None
+
+
+def hash_file(path, algorithm="sha256"):
+    """Hash a regular file in chunks without exposing its contents."""
+    if algorithm not in HASH_ALGORITHMS:
+        raise ValueError(f"unsupported hash algorithm: {algorithm}")
+    source = Path(path).expanduser()
+    try:
+        with source.open("rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise OSError("not a regular file")
+            digest = hashlib.new(algorithm)
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise OSError(f"cannot hash {source}: {error}") from error
+    return (
+        f"File: {_resolved_path(source)}\n"
+        f"Algorithm: {algorithm.upper().replace('SHA', 'SHA-')}\n"
+        f"Digest: {digest.hexdigest()}"
+    )
+
+
+def _write_report_exclusive(report, output_path, protected_paths=()):
+    output = Path(output_path).expanduser()
+    try:
+        resolved_output = _resolved_path(output)
+        resolved_protected = [_resolved_path(path) for path in protected_paths]
+    except OSError as error:
+        return str(error)
+    if resolved_output in resolved_protected:
+        return f"refusing to write report over input file: {resolved_output}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    try:
+        descriptor = os.open(output, flags, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(report + "\n")
+    except OSError as error:
+        return f"cannot create report {output}: {error}"
+    return None
+
+
+def hash_main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="sentinel hash",
+        description="Print a SHA-2 digest for a local file without printing its contents.",
+    )
+    parser.add_argument("file", help="file to hash")
+    parser.add_argument(
+        "--algorithm",
+        choices=HASH_ALGORITHMS,
+        default="sha256",
+        help="SHA-2 algorithm (default: sha256)",
+    )
+    parser.add_argument("--output", help="create a digest report without overwriting")
+    args = parser.parse_args(argv)
+    try:
+        report = hash_file(args.file, args.algorithm)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"sentinel hash: {error}\n")
+    if args.output:
+        error = _write_report_exclusive(
+            report, args.output, protected_paths=(args.file,)
+        )
+        if error:
+            parser.exit(1, f"sentinel hash: {error}\n")
+    print(report)
+    return 0
+
+
+def _password_strength(password):
+    """Return heuristic composition checks, not a measure of entropy."""
+    checks = (
+        len(password) >= PASSWORD_MIN_LENGTH,
+        any(char.islower() for char in password),
+        any(char.isupper() for char in password),
+        any(char.isdigit() for char in password),
+        any(not char.isalnum() for char in password),
+    )
+    return checks
+
+
+def password_main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="sentinel password",
+        description="Generate a one-time password or check a hidden password heuristically.",
+    )
+    subparsers = parser.add_subparsers(dest="action", required=True)
+    generate_parser = subparsers.add_parser("generate", help="generate a secret password")
+    generate_parser.add_argument(
+        "--length",
+        type=int,
+        default=20,
+        help=f"length from {PASSWORD_MIN_LENGTH} to {PASSWORD_MAX_LENGTH} (default: 20)",
+    )
+    subparsers.add_parser("check", help="check password composition without echoing input")
+    args = parser.parse_args(argv)
+
+    if not sys.stdout.isatty():
+        parser.exit(
+            1,
+            "sentinel password: password actions require an interactive terminal; "
+            "generated secrets are never written to redirected output\n",
+        )
+    if args.action == "generate":
+        if not PASSWORD_MIN_LENGTH <= args.length <= PASSWORD_MAX_LENGTH:
+            parser.error(
+                f"--length must be between {PASSWORD_MIN_LENGTH} and {PASSWORD_MAX_LENGTH}"
+            )
+        password = "".join(
+            secrets.choice(PASSWORD_ALPHABET) for _ in range(args.length)
+        )
+        print("Generated password (shown once; not saved):")
+        print(password)
+        return 0
+
+    if not sys.stdin.isatty():
+        parser.exit(1, "sentinel password: password check requires an interactive terminal\n")
+    password = getpass.getpass("Password (input hidden): ")
+    checks = _password_strength(password)
+    labels = ("minimum length", "lowercase", "uppercase", "digit", "symbol")
+    print("Password composition heuristic (not an entropy estimate):")
+    for label, passed in zip(labels, checks):
+        print(f"- {label}: {'pass' if passed else 'fail'}")
+    return 0 if all(checks) else 1
+
+
+def logs_main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="sentinel logs",
+        description="Analyze coarse statistics and indicators in one local text log.",
+    )
+    parser.add_argument("file", help="path to the log file")
+    parser.add_argument("--output", help="also save the report to this path")
+    args = parser.parse_args(argv)
+    try:
+        report = analyze_log_file(args.file)
+    except OSError as error:
+        parser.exit(1, f"sentinel logs: {error}\n")
+    if args.output:
+        error = _write_report(report, args.output, protected_paths=(args.file,))
+        if error:
+            parser.exit(1, f"sentinel logs: {error}\n")
+    print(report)
+    return 0
+
+
+def collect_main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="sentinel collect",
+        description="List matching evidence-file metadata in one directory.",
+    )
+    parser.add_argument("directory", help="directory to scan (non-recursively)")
+    parser.add_argument("--output", help="also save the report to this path")
+    args = parser.parse_args(argv)
+    if args.output:
+        output = Path(args.output).expanduser()
+        directory = Path(args.directory).expanduser()
+        try:
+            resolved_output = _resolved_path(output)
+            resolved_directory = _resolved_path(directory)
+        except OSError as error:
+            parser.exit(1, f"sentinel collect: {error}\n")
+        if resolved_output.parent == resolved_directory and resolved_output.suffix in EVIDENCE_EXTENSIONS:
+            try:
+                output_stat = output.stat()
+            except FileNotFoundError:
+                output_stat = None
+            except OSError as error:
+                parser.exit(1, f"sentinel collect: cannot inspect report path {output}: {error}\n")
+            if output_stat and stat.S_ISREG(output_stat.st_mode):
+                parser.exit(
+                    1,
+                    f"sentinel collect: refusing to overwrite matching evidence file: {output}\n",
+                )
+    report, errors = collect_evidence(args.directory)
+    if args.output:
+        error = _write_report(report, args.output)
+        if error:
+            parser.exit(1, f"sentinel collect: {error}\n")
+    print(report)
+    return 1 if errors else 0
+
 
 # --- sentinel.py ---
 #!/usr/bin/env python3
@@ -55,8 +390,8 @@ def banner():
     print(f"  {BLUE}{'─' * 64}{RESET}")
 
 
-def loading(message="Initializing security modules"):
-    if not sys.stdout.isatty():
+def loading(message="Initializing security modules", enabled=True):
+    if not enabled or not sys.stdout.isatty():
         return
     for frame in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
         print(f"\r{CYAN}{frame}{RESET} {message}...", end="", flush=True)
@@ -64,8 +399,8 @@ def loading(message="Initializing security modules"):
     print(f"\r{GREEN}✔{RESET} {message} ready.{' ' * 10}")
 
 
-def scan_animation():
-    if not sys.stdout.isatty():
+def scan_animation(enabled=True):
+    if not enabled or not sys.stdout.isatty():
         return
     width = 24
     for frame in range(width * 2):
@@ -138,12 +473,47 @@ class Sentinel:
         )
 
     def answer(self, command):
-        command = command.lower().strip()
-        if command in {"quit", "exit", "q"}:
+        command = command.strip()
+        normalized = command.lower()
+        if normalized in {"quit", "exit", "q"}:
             return False
-        if command in {"help", "?"}:
-            print(f"{CYAN}Commands{RESET}: {YELLOW}status{RESET}, {YELLOW}alerts{RESET}, {YELLOW}recent{RESET}, {YELLOW}what happened{RESET}, {YELLOW}explain{RESET}, {YELLOW}help{RESET}, {YELLOW}quit{RESET}")
-        elif command in {"status", "what happened", "what happened?", "recent", "alerts"}:
+        try:
+            lexer = shlex.shlex(command, posix=True)
+            lexer.whitespace_split = True
+            lexer.escape = ""
+            tokens = list(lexer)
+        except ValueError as error:
+            print(f"Sentinel: Could not parse command ({error}). Use 'help' for examples.")
+            return True
+        lowered_tokens = [token.lower() for token in tokens]
+        if tokens and lowered_tokens[0] in {"logs", "collect", "hash", "password"}:
+            command_handlers = {
+                "logs": logs_main,
+                "collect": collect_main,
+                "hash": hash_main,
+                "password": password_main,
+            }
+            handler_args = tokens[1:]
+            if lowered_tokens[0] == "collect" and handler_args:
+                if handler_args[0].lower() == "evidence":
+                    handler_args = handler_args[1:]
+            self._run_cli_handler(command_handlers[lowered_tokens[0]], handler_args)
+        elif lowered_tokens[:2] == ["analyze", "logs"]:
+            self._run_cli_handler(logs_main, tokens[2:])
+        elif lowered_tokens[:2] == ["analyze", "evidence"]:
+            self._run_cli_handler(collect_main, tokens[2:])
+        elif lowered_tokens and lowered_tokens[0] == "analyze":
+            if len(tokens) > 1 and tokens[1].startswith("--"):
+                self._run_cli_handler(analyst_main, tokens[1:])
+            else:
+                self._explain_latest()
+        elif normalized in {"analysis", "analyze alert", "alert analysis"}:
+            self._explain_latest()
+        elif normalized in {
+            "help", "?", "commands", "what can you do", "capabilities",
+        } or "help" in normalized:
+            self._show_help()
+        elif normalized in {"status", "what happened", "what happened?", "recent", "alerts"}:
             stored = self.store.recent(5) if self.store else []
             if not self.alerts and not stored:
                 print("Sentinel: No scan alerts recorded yet.")
@@ -158,31 +528,19 @@ class Sentinel:
                         f"{event.get('source')} | {event.get('event')} | "
                         f"{incident_id}"
                     )
-        elif command == "explain":
-            if self.alerts:
-                event = self.alerts[-1]
-                analysis = local_analysis(event)
-                print("Sentinel evidence-bound analysis:\n" + format_analysis(analysis))
-                try:
-                    proposal = explain_with_gemini(event) if explain_with_gemini else None
-                    ai_analysis = verified_ai_analysis(event, proposal)
-                except Exception as error:
-                    ai_analysis = None
-                    print(
-                        f"Gemini unavailable ({type(error).__name__}); "
-                        "using local evidence only."
-                    )
-                if ai_analysis:
-                    print("AI-selected verified evidence:")
-                    for item in ai_analysis["observations"]:
-                        print(f"- {item['field']}: {item['value']}")
-                    if ai_analysis["investigation_steps"]:
-                        print("AI-selected approved investigation steps:")
-                        for step in ai_analysis["investigation_steps"]:
-                            print(f"- {step}")
-                print(self.render(event))
-            else:
-                print("Sentinel: There is no alert to explain.")
+        elif any(word in normalized for word in ("explain", "incident", "alert")):
+            self._explain_latest()
+        elif any(word in normalized for word in ("scan", "monitor", "detect")):
+            self._show_scan_guidance()
+        elif any(word in normalized for word in ("log", "logs")):
+            print("Sentinel: For file-level log statistics and indicators, run "
+                  "'logs PATH' or 'analyze logs PATH'. This does not analyze "
+                  "network telemetry.")
+        elif any(word in normalized for word in ("evidence", "collect")):
+            print("Sentinel: To list evidence-file metadata, run "
+                  "'collect DIRECTORY' or 'analyze evidence DIRECTORY'.")
+        elif any(word in normalized for word in ("model", "machine learning", "anomaly", "ml ")):
+            self._show_analysis_scope()
         else:
             context = "No alert yet." if not self.alerts else repr(self.alerts[-1])
             try:
@@ -191,20 +549,88 @@ class Sentinel:
                 answer = f"Cloud assistant unavailable ({type(error).__name__})."
             if answer:
                 print(f"{CYAN}Sentinel Gemini{RESET}: {answer}")
-            elif any(word in command for word in {"safe", "security", "status", "happening", "alert"}):
-                print(f"{GREEN}Sentinel{RESET}: I am monitoring the alert stream. Automatic blocking is disabled. Type {YELLOW}'alerts'{RESET} or {YELLOW}'explain'{RESET} for details.")
             else:
-                print(f"{GREEN}Sentinel{RESET}: Ask me about alerts, scans, safety, status, or type {YELLOW}'help'{RESET}.")
+                self._show_analysis_scope()
         return True
+
+    @staticmethod
+    def _run_cli_handler(handler, args):
+        try:
+            handler(args)
+        except SystemExit:
+            pass
+
+    def _show_help(self):
+        print(
+            "Sentinel commands: status, alerts, recent, explain, help, quit\n"
+            "File tools: logs PATH [--output REPORT], collect DIRECTORY "
+            "[--output REPORT], hash FILE [--algorithm sha256] [--output REPORT]\n"
+            "Password tools: password generate [--length 20], password check\n"
+            "Analyze newest alert: analyze alert. Run detection while startup monitoring "
+            "is active with the configured source/threshold options."
+        )
+
+    def _show_scan_guidance(self):
+        recent_count = len(self.store.recent(5)) if self.store else len(self.alerts)
+        print(
+            f"Sentinel: live monitoring is handled by the configured event source; "
+            f"{recent_count} recent alert(s) are available. Detection uses recorded "
+            "network telemetry and configured scan thresholds, not general AI knowledge. "
+            "Use 'status' or 'explain', or start with 'sentinel --help' and "
+            "'python -m sentinel monitor --help' to configure a scan."
+        )
+
+    @staticmethod
+    def _show_analysis_scope():
+        print(
+            "Sentinel: the local ML model performs behavioral anomaly scoring on "
+            "network-event features after sufficient normal history; it is not a "
+            "general-purpose language model or a source of general knowledge. "
+            "Use 'explain' for evidence-bound alert analysis."
+        )
+
+    def _explain_latest(self):
+        if not self.alerts:
+            print("Sentinel: There is no alert to explain.")
+            return
+        event = self.alerts[-1]
+        analysis = local_analysis(event)
+        print("Sentinel evidence-bound analysis:\n" + format_analysis(analysis))
+        try:
+            proposal = explain_with_gemini(event) if explain_with_gemini else None
+            ai_analysis = verified_ai_analysis(event, proposal)
+        except Exception as error:
+            ai_analysis = None
+            print(
+                f"Gemini unavailable ({type(error).__name__}); "
+                "using local evidence only."
+            )
+        if ai_analysis:
+            print("AI-selected verified evidence:")
+            for item in ai_analysis["observations"]:
+                print(f"- {item['field']}: {item['value']}")
+            if ai_analysis["investigation_steps"]:
+                print("AI-selected approved investigation steps:")
+                for step in ai_analysis["investigation_steps"]:
+                    print(f"- {step}")
+        print(self.render(event))
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "monitor":
         detector_main(sys.argv[2:])
-        return
+        return 0
     if len(sys.argv) > 1 and sys.argv[1] == "analyze":
         analyst_main(sys.argv[2:])
-        return
+        return 0
+    if len(sys.argv) > 1 and sys.argv[1] == "logs":
+        return logs_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "collect":
+        return collect_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "hash":
+        return hash_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "password":
+        return password_main(sys.argv[2:])
     parser = argparse.ArgumentParser(description="Sentinel terminal security monitor")
     parser.add_argument("--alert-file", default=os.path.expanduser("~/.sentinel_alerts.jsonl"))
     parser.add_argument("--database-file", default=os.path.expanduser("~/.sentinel.db"))
@@ -212,6 +638,11 @@ def main():
         "--no-monitor",
         action="store_true",
         help="Open the alert console without starting an event monitor",
+    )
+    parser.add_argument(
+        "--no-animation",
+        action="store_true",
+        help="Skip startup progress animations",
     )
     args, monitor_options = parser.parse_known_args()
     if args.no_monitor and monitor_options:
@@ -238,11 +669,11 @@ def main():
         watcher = threading.Thread(target=sentinel.watch, daemon=True)
         watcher.start()
         banner()
-        scan_animation()
-        loading("Loading ML and alert engine")
-        loading("Connecting local alert database")
+        scan_animation(enabled=not args.no_animation)
+        loading("Loading ML and alert engine", enabled=not args.no_animation)
+        loading("Connecting local alert database", enabled=not args.no_animation)
         if monitor:
-            loading("Starting platform event monitor")
+            loading("Starting platform event monitor", enabled=not args.no_animation)
         print(f"{GREEN}Sentinel is online{RESET}. Type {YELLOW}'help'{RESET} for commands.")
         while sentinel.answer(input("sentinel> ")):
             pass

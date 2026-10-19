@@ -22,6 +22,12 @@ an attack.
   aggregation, event timelines, source health, and restart recovery.
 - **Evidence-grounded analysis:** local triage guidance and optional Gemini
   analysis can only surface alert evidence and approved investigation steps.
+- **Opt-in file utilities:** coarse analysis of one local text log and
+  non-recursive metadata collection for selected evidence-file extensions,
+  plus streaming SHA-2 file hashing.
+- **Intent-aware terminal assistant:** routes familiar requests to local log,
+  evidence, hashing, and alert tools, and explains Sentinel's behavioral
+  detection scope without presenting it as general AI knowledge.
 - **Animated terminal experience:** colored startup banner, scanning progress
   animation, live incident output, and interactive alert commands. Animation
   and colors are disabled in non-interactive output; `NO_COLOR` disables color.
@@ -123,6 +129,8 @@ is restricted, run `.\.venv\Scripts\sentinel.exe`. The automatic monitor uses
 the platform's default source: UFW on Linux, Windows Filtering Platform on
 Windows, and unified logs on macOS. One `Ctrl+C` or `quit` stops the console
 and its monitor. Use `sentinel --no-monitor` to open only the console.
+Use `sentinel --no-animation` to skip the startup progress effects while
+keeping the banner and interactive console.
 
 The console accepts these commands:
 
@@ -131,8 +139,92 @@ The console accepts these commands:
 | `status` | Show recent alerts |
 | `alerts` / `recent` | List recent incidents |
 | `explain` | Show evidence and safe investigation steps |
+| `logs PATH` | Analyze one log file; optionally add `--output REPORT` |
+| `collect DIRECTORY` | List evidence-file metadata; optionally save a report |
+| `hash FILE` | Print a SHA-2 digest without printing file contents |
+| `password generate` / `password check` | Generate or check a secret interactively |
 | `help` | Show commands |
 | `quit` | Exit the console |
+
+File-tool commands can also be run directly as `sentinel logs ...`,
+`sentinel collect ...`, and `sentinel hash ...`. In the console, natural
+requests such as `analyze logs "path with spaces"` and `collect evidence
+"directory"` route to these same local commands. `analyze alert` and `explain`
+show the newest alert using its recorded evidence.
+
+### Analyze logs and collect evidence files
+
+The standalone utilities do not start the monitor or interactive console.
+Analyze a single local text log and optionally save the report:
+
+```sh
+sentinel logs /path/to/application.log
+sentinel logs /path/to/application.log --output /path/to/log-report.txt
+```
+
+The report includes byte, line, word, and character totals; case-sensitive
+substring counts for `INFO`, `WARNING`, and `ERROR`; unique email candidates;
+and unique IP addresses validated with Python's `ipaddress` module. Invalid IP
+candidates are omitted. Input is decoded as UTF-8 with invalid byte sequences
+replaced. These are coarse, file-level indicators and statistics—not
+normalized network telemetry, traffic analysis, or proof of malicious activity.
+The command reads only the file explicitly named.
+
+Collect metadata from matching regular files in one directory, without
+descending into subdirectories:
+
+```sh
+sentinel collect /path/to/evidence
+sentinel collect /path/to/evidence --output /path/to/evidence-report.txt
+```
+
+The collector includes only case-sensitive `.txt`, `.log`, `.pdf`, `.docx`,
+`.exe`, `.bat`, and `.ps1` extensions, and reports each filename, extension,
+size, and absolute path. A new report destination is written after scanning,
+so it is not included in that scan. An existing matching file in the scanned
+directory is never overwritten as a report destination. Inaccessible entries
+are reported and cause a non-zero exit status; report write failures are
+reported as errors.
+
+These utilities adapt only the useful behaviors identified from shallow
+inspection of the source tool repositories; they are not full ports of those
+projects. They do not recurse, execute files, inspect document contents, or
+send data to a service. Use `python -m sentinel logs ...` and
+`python -m sentinel collect ...` as equivalents when invoking from a source
+checkout.
+
+### Hash files and handle passwords safely
+
+Hash one file with SHA-256 (the default) or another allow-listed SHA-2
+algorithm:
+
+```sh
+sentinel hash /path/to/evidence.bin
+sentinel hash /path/to/evidence.bin --algorithm sha512
+sentinel hash /path/to/evidence.bin --output /path/to/digest-report.txt
+```
+
+Files are read in chunks. Only the path, algorithm, and digest are shown; file
+contents are never printed or persisted. A digest report is strictly
+create-only: an existing output path is rejected, and the source file cannot
+be used as the output path.
+
+Password tools are opt-in and require an interactive terminal:
+
+```sh
+sentinel password generate --length 24
+sentinel password check
+```
+
+Generation uses Python's `secrets` module and accepts lengths from 8 through
+256 (default 20). The generated secret is shown once in the terminal and is
+never saved; generation refuses redirected/non-interactive output. The checker
+uses hidden input and reports only a simple composition heuristic (minimum
+length, lowercase, uppercase, digit, and symbol), not entropy or a guarantee
+of password strength. Password text is not logged, saved, or sent to Gemini.
+
+For source-checkout invocation, the equivalents are
+`python -m sentinel hash ...` and `python -m sentinel password ...`.
 
 The baseline and source status are saved when Sentinel stops. Animation is
 shown only in a terminal and can be disabled by redirecting output. Set
@@ -175,7 +267,10 @@ python -m sentinel analyze --source 192.0.2.10 --events 20 --unique-ports 18 --d
 python -m sentinel analyze --query "correlate firewall events"
 ```
 
-To enable Gemini explanations, set `GEMINI_API_KEY` and optionally
+The Isolation Forest is a behavioral anomaly scorer over recorded network
+event features after sufficient normal history; it is not a general-purpose
+language model or source of broad factual knowledge. To enable optional Gemini
+explanations, set `GEMINI_API_KEY` and optionally
 `GEMINI_MODEL`. Gemini receives the selected alert context; its free-form
 claims are not shown. Sentinel validates proposed evidence against the alert
 and restricts investigation steps to an allow-list. Without a key, local
