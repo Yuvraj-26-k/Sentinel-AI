@@ -2,5 +2,3 @@
 requests>=2.31,<3
 SQLAlchemy>=2.0,<3
 scikit-learn>=1.4,<2
-fastapi>=0.110,<1
-uvicorn>=0.27,<1

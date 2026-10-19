@@ -25,8 +25,8 @@ an attack.
 - **Animated terminal experience:** colored startup banner, scanning progress
   animation, live incident output, and interactive alert commands. Animation
   and colors are disabled in non-interactive output; `NO_COLOR` disables color.
-- **Optional local API:** read-only JSON endpoints and a live SSE stream,
-  bound to loopback. There is no web dashboard.
+- **CLI-only interface:** inspect live alerts and incidents directly in the
+  terminal; no web server or dashboard is installed.
 
 ## Requirements
 
@@ -163,26 +163,6 @@ See `python sentinel.py monitor --help` for all thresholds and data-file
 options. Events without a destination port are retained where supported but
 cannot contribute to port-scan detection.
 
-### Optional local API
-
-Run the read-only API in another terminal if local tools need access to
-telemetry:
-
-```sh
-python -m uvicorn sentinel:app --host 127.0.0.1 --port 8000
-```
-
-Available endpoints:
-
-- `GET /api/health`
-- `GET /api/events?limit=100`
-- `GET /api/incidents?limit=100`
-- `GET /api/incidents/{incident_id}`
-- `GET /api/stream` (Server-Sent Events)
-
-The API binds to loopback and has no interactive documentation or web UI. Do
-not expose it publicly without adding authentication and transport security.
-
 ### Optional local analysis and Gemini
 
 Run a local example analysis or search the built-in triage guidance:
@@ -212,15 +192,15 @@ Suspicious windows are excluded from normal training samples.
 
 By default, Sentinel stores its SQLite event and incident database at
 `~/.sentinel.db`, alert JSON Lines at `~/.sentinel_alerts.jsonl`, and model
-history at `~/.nmap_ai_baseline.json`. Override paths with the detector's
+history at `~/.nmap_ai_baseline.json`. Override paths with the monitor's
 `--database-file`, `--alert-file`, and `--model-file` options.
 
 ## Project layout
 
 The repository keeps the runtime in four cohesive Python modules, one
 consolidated regression test file, this guide, the dependency list, and
-`.gitignore`—eight project files total. The runtime modules group telemetry,
-detection, analysis, and the terminal/API surfaces.
+`.gitignore`—eight project files total. The runtime modules group telemetry, detection, analysis, and the terminal
+interface.
 
 ## Tests
 
@@ -231,6 +211,6 @@ python -m unittest -v test_sentinel
 ```
 
 The tests cover platform adapters, detection, anomaly scoring, incident
-persistence, rotation, API behavior, and evidence validation. They cannot
+persistence, rotation, CLI behavior, and evidence validation. They cannot
 verify operating-system audit settings, real firewall behavior, permissions,
 or production incident response.
