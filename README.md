@@ -22,6 +22,8 @@ an attack.
   aggregation, event timelines, source health, and restart recovery.
 - **Evidence-grounded analysis:** local triage guidance and optional Gemini
   analysis can only surface alert evidence and approved investigation steps.
+- **Opt-in file utilities:** coarse analysis of one local text log and
+  non-recursive metadata collection for selected evidence-file extensions.
 - **Animated terminal experience:** colored startup banner, scanning progress
   animation, live incident output, and interactive alert commands. Animation
   and colors are disabled in non-interactive output; `NO_COLOR` disables color.
@@ -133,6 +135,47 @@ The console accepts these commands:
 | `explain` | Show evidence and safe investigation steps |
 | `help` | Show commands |
 | `quit` | Exit the console |
+
+### Analyze logs and collect evidence files
+
+The standalone utilities do not start the monitor or interactive console.
+Analyze a single local text log and optionally save the report:
+
+```sh
+sentinel logs /path/to/application.log
+sentinel logs /path/to/application.log --output /path/to/log-report.txt
+```
+
+The report includes byte, line, word, and character totals; case-sensitive
+substring counts for `INFO`, `WARNING`, and `ERROR`; unique email candidates;
+and unique IP addresses validated with Python's `ipaddress` module. Invalid IP
+candidates are omitted. Input is decoded as UTF-8 with invalid byte sequences
+replaced. These are coarse, file-level indicators and statistics—not
+normalized network telemetry, traffic analysis, or proof of malicious activity.
+The command reads only the file explicitly named.
+
+Collect metadata from matching regular files in one directory, without
+descending into subdirectories:
+
+```sh
+sentinel collect /path/to/evidence
+sentinel collect /path/to/evidence --output /path/to/evidence-report.txt
+```
+
+The collector includes only case-sensitive `.txt`, `.log`, `.pdf`, `.docx`,
+`.exe`, `.bat`, and `.ps1` extensions, and reports each filename, extension,
+size, and absolute path. A new report destination is written after scanning,
+so it is not included in that scan. An existing matching file in the scanned
+directory is never overwritten as a report destination. Inaccessible entries
+are reported and cause a non-zero exit status; report write failures are
+reported as errors.
+
+These utilities adapt only the useful behaviors identified from shallow
+inspection of the source tool repositories; they are not full ports of those
+projects. They do not recurse, execute files, inspect document contents, or
+send data to a service. Use `python -m sentinel logs ...` and
+`python -m sentinel collect ...` as equivalents when invoking from a source
+checkout.
 
 The baseline and source status are saved when Sentinel stops. Animation is
 shown only in a terminal and can be disabled by redirecting output. Set

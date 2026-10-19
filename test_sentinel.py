@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -36,7 +37,14 @@ from analyst import (
     validate_analysis,
     verified_ai_analysis,
 )
-from sentinel import Sentinel, main as sentinel_main
+from sentinel import (
+    Sentinel,
+    analyze_log_file,
+    collect_main as sentinel_module_collect_main,
+    collect_evidence,
+    logs_main as sentinel_module_logs_main,
+    main as sentinel_main,
+)
 
 # --- test_event_adapters.py ---
 class EventAdapterTests(unittest.TestCase):
@@ -632,6 +640,125 @@ class EvidenceAnalystTests(unittest.TestCase):
 
 # --- test_sentinel_ui.py ---
 class SentinelUiTests(unittest.TestCase):
+    def test_logs_command_reports_file_metrics_and_validated_indicators(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory, "sample.log")
+            text = (
+                "INFO ERROR WARNING\n"
+                "INFOFUL warning\n"
+                "admin@example.com 999.1.2.3 192.0.2.1 2001:db8::1\n"
+            )
+            source.write_bytes(text.encode("utf-8"))
+
+            report = analyze_log_file(source)
+
+            self.assertIn(f"Bytes: {len(text.encode('utf-8'))}", report)
+            self.assertIn(f"Lines: {len(text.splitlines())}", report)
+            self.assertIn(f"Words: {len(text.split())}", report)
+            self.assertIn(f"Characters: {len(text)}", report)
+            self.assertIn("INFO substring occurrences (case-sensitive): 2", report)
+            self.assertIn("WARNING substring occurrences (case-sensitive): 1", report)
+            self.assertIn("ERROR substring occurrences (case-sensitive): 1", report)
+            self.assertIn("admin@example.com", report)
+            self.assertIn("192.0.2.1", report)
+            self.assertIn("2001:db8::1", report)
+            self.assertNotIn("999.1.2.3", report)
+
+    def test_logs_command_saves_report_and_refuses_to_overwrite_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory, "sample.log")
+            output = Path(directory, "report.txt")
+            source.write_text("ERROR 192.0.2.1\n", encoding="utf-8")
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(
+                    sentinel_module_logs_main(
+                        [str(source), "--output", str(output)]
+                    ),
+                    0,
+                )
+            self.assertEqual(output.read_text(encoding="utf-8"), stdout.getvalue())
+
+            with redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as raised:
+                    sentinel_module_logs_main(
+                        [str(source), "--output", str(source)]
+                    )
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("refusing to overwrite input file", stderr.getvalue())
+            self.assertIn("ERROR", source.read_text(encoding="utf-8"))
+
+    def test_logs_command_rejects_non_regular_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(OSError):
+                analyze_log_file(directory)
+
+    def test_evidence_collection_is_shallow_filtered_and_deterministic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "z.log").write_bytes(b"log")
+            (root / "a.txt").write_bytes(b"text")
+            (root / "ignored.TXT").write_bytes(b"upper-case extension")
+            (root / "ignored.csv").write_bytes(b"unsupported")
+            nested = root / "nested"
+            nested.mkdir()
+            (nested / "nested.pdf").write_bytes(b"not scanned")
+
+            report, errors = collect_evidence(root)
+
+            self.assertEqual(errors, [])
+            self.assertIn("Matching files: 2", report)
+            self.assertIn("Extensions: .log=1, .txt=1", report)
+            self.assertLess(report.index("a.txt"), report.index("z.log"))
+            self.assertNotIn("ignored.TXT", report)
+            self.assertNotIn("nested.pdf", report)
+            self.assertIn(f"{(root / 'a.txt').resolve()}", report)
+
+    def test_evidence_collection_reports_directory_and_output_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory, "missing")
+            report, errors = collect_evidence(missing)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("Errors: 1", report)
+            self.assertIn("Collection errors:", report)
+
+            source = Path(directory, "sample.log")
+            source.write_text("evidence", encoding="utf-8")
+            with redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as raised:
+                    sentinel_module_collect_main(
+                        [
+                            directory,
+                            "--output",
+                            str(Path(directory, "absent", "report.txt")),
+                        ]
+                    )
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("cannot write report", stderr.getvalue())
+
+            with redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as raised:
+                    sentinel_module_collect_main(
+                        [directory, "--output", str(source)]
+                    )
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("refusing to overwrite matching evidence file", stderr.getvalue())
+            self.assertEqual(source.read_text(encoding="utf-8"), "evidence")
+
+    def test_cli_dispatches_standalone_commands_without_starting_console(self):
+        with (
+            patch.object(sys, "argv", ["sentinel", "logs", "example.log"]),
+            patch("sentinel.logs_main", return_value=7) as logs,
+        ):
+            self.assertEqual(sentinel_main(), 7)
+        logs.assert_called_once_with(["example.log"])
+
+        with (
+            patch.object(sys, "argv", ["sentinel", "collect", "evidence"]),
+            patch("sentinel.collect_main", return_value=3) as collect,
+        ):
+            self.assertEqual(sentinel_main(), 3)
+        collect.assert_called_once_with(["evidence"])
+
     def test_terminal_command_starts_and_stops_monitor_automatically(self):
         from unittest.mock import Mock
         import threading

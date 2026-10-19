@@ -1,11 +1,15 @@
 import argparse
+import ipaddress
 import json
 import os
+import re
+import stat
 import sys
 import subprocess
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from analyst import (
     AlertStore,
     analyst_main,
@@ -16,6 +20,201 @@ from analyst import (
     verified_ai_analysis,
 )
 from detection import detector_main
+
+EVIDENCE_EXTENSIONS = {".txt", ".log", ".pdf", ".docx", ".exe", ".bat", ".ps1"}
+EMAIL_CANDIDATE_RE = re.compile(
+    r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~-])"
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+"
+    r"(?![A-Za-z0-9-])"
+)
+IP_CANDIDATE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.:])"
+    r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}"
+    r"(?![A-Za-z0-9_.:])"
+    r"|(?<![A-Za-z0-9_.:])"
+    r"(?:[0-9A-Fa-f]*:[0-9A-Fa-f:.]*[0-9A-Fa-f]|::)"
+    r"(?![A-Za-z0-9_.:])"
+)
+
+
+def analyze_log_file(path):
+    """Return a deterministic, file-level text analysis report."""
+    path = Path(path).expanduser()
+    try:
+        with path.open("rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise OSError("not a regular file")
+            raw = handle.read()
+    except OSError as error:
+        raise OSError(f"cannot read {path}: {error}") from error
+
+    text = raw.decode("utf-8", errors="replace")
+    emails = sorted(set(EMAIL_CANDIDATE_RE.findall(text)))
+    addresses = set()
+    for candidate in IP_CANDIDATE_RE.findall(text):
+        try:
+            addresses.add(str(ipaddress.ip_address(candidate)))
+        except ValueError:
+            continue
+    addresses = sorted(addresses)
+
+    lines = [
+        f"Log analysis: {os.path.abspath(path)}",
+        f"Bytes: {len(raw)}",
+        f"Lines: {len(text.splitlines())}",
+        f"Words: {len(text.split())}",
+        f"Characters: {len(text)}",
+        f"INFO substring occurrences (case-sensitive): {text.count('INFO')}",
+        f"WARNING substring occurrences (case-sensitive): {text.count('WARNING')}",
+        f"ERROR substring occurrences (case-sensitive): {text.count('ERROR')}",
+        f"Unique email candidates: {len(emails)}",
+    ]
+    lines.extend(f"  {email}" for email in emails)
+    lines.append(f"Unique validated IP addresses: {len(addresses)}")
+    lines.extend(f"  {address}" for address in addresses)
+    return "\n".join(lines)
+
+
+def collect_evidence(directory):
+    """Return a deterministic report and any directory-entry errors."""
+    directory = Path(directory).expanduser()
+    absolute_directory = Path(os.path.abspath(directory))
+    records = []
+    errors = []
+    try:
+        with os.scandir(directory) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                entry_path = Path(entry.path)
+                if entry_path.suffix not in EVIDENCE_EXTENSIONS:
+                    continue
+                try:
+                    absolute_path = Path(os.path.abspath(entry_path))
+                    metadata = entry.stat(follow_symlinks=False)
+                    if not stat.S_ISREG(metadata.st_mode):
+                        continue
+                    records.append(
+                        (entry.name, entry_path.suffix, metadata.st_size, str(absolute_path))
+                    )
+                except OSError as error:
+                    errors.append(
+                        f"{absolute_path}: {type(error).__name__}: {error}"
+                    )
+    except OSError as error:
+        errors.append(
+            f"{absolute_directory}: {type(error).__name__}: {error}"
+        )
+
+    lines = [
+        f"Evidence collection: {absolute_directory}",
+        f"Matching files: {len(records)}",
+        f"Errors: {len(errors)}",
+    ]
+    extension_counts = {}
+    for _, extension, _, _ in records:
+        extension_counts[extension] = extension_counts.get(extension, 0) + 1
+    if extension_counts:
+        lines.append(
+            "Extensions: "
+            + ", ".join(
+                f"{extension}={extension_counts[extension]}"
+                for extension in sorted(extension_counts)
+            )
+        )
+    if records:
+        lines.append("Files:")
+        lines.extend(
+            f"- {name} | {extension} | {size} bytes | {absolute_path}"
+            for name, extension, size, absolute_path in records
+        )
+    else:
+        lines.append("No matching files.")
+    if errors:
+        lines.append("Collection errors:")
+        lines.extend(f"- {error}" for error in errors)
+    return "\n".join(lines), errors
+
+
+def _resolved_path(path):
+    try:
+        return Path(path).expanduser().resolve()
+    except (OSError, RuntimeError) as error:
+        raise OSError(f"cannot resolve path {path}: {error}") from error
+
+
+def _write_report(report, output_path, protected_paths=()):
+    output = Path(output_path).expanduser()
+    try:
+        resolved_output = _resolved_path(output)
+        resolved_protected = [_resolved_path(path) for path in protected_paths]
+    except OSError as error:
+        return str(error)
+    if resolved_output in resolved_protected:
+        return f"refusing to overwrite input file: {resolved_output}"
+    try:
+        output.write_text(report + "\n", encoding="utf-8")
+    except OSError as error:
+        return f"cannot write report {output}: {error}"
+    return None
+
+
+def logs_main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="sentinel logs",
+        description="Analyze coarse statistics and indicators in one local text log.",
+    )
+    parser.add_argument("file", help="path to the log file")
+    parser.add_argument("--output", help="also save the report to this path")
+    args = parser.parse_args(argv)
+    try:
+        report = analyze_log_file(args.file)
+    except OSError as error:
+        parser.exit(1, f"sentinel logs: {error}\n")
+    if args.output:
+        error = _write_report(report, args.output, protected_paths=(args.file,))
+        if error:
+            parser.exit(1, f"sentinel logs: {error}\n")
+    print(report)
+    return 0
+
+
+def collect_main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="sentinel collect",
+        description="List matching evidence-file metadata in one directory.",
+    )
+    parser.add_argument("directory", help="directory to scan (non-recursively)")
+    parser.add_argument("--output", help="also save the report to this path")
+    args = parser.parse_args(argv)
+    if args.output:
+        output = Path(args.output).expanduser()
+        directory = Path(args.directory).expanduser()
+        try:
+            resolved_output = _resolved_path(output)
+            resolved_directory = _resolved_path(directory)
+        except OSError as error:
+            parser.exit(1, f"sentinel collect: {error}\n")
+        if resolved_output.parent == resolved_directory and resolved_output.suffix in EVIDENCE_EXTENSIONS:
+            try:
+                output_stat = output.stat()
+            except FileNotFoundError:
+                output_stat = None
+            except OSError as error:
+                parser.exit(1, f"sentinel collect: cannot inspect report path {output}: {error}\n")
+            if output_stat and stat.S_ISREG(output_stat.st_mode):
+                parser.exit(
+                    1,
+                    f"sentinel collect: refusing to overwrite matching evidence file: {output}\n",
+                )
+    report, errors = collect_evidence(args.directory)
+    if args.output:
+        error = _write_report(report, args.output)
+        if error:
+            parser.exit(1, f"sentinel collect: {error}\n")
+    print(report)
+    return 1 if errors else 0
+
 
 # --- sentinel.py ---
 #!/usr/bin/env python3
@@ -201,10 +400,14 @@ class Sentinel:
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "monitor":
         detector_main(sys.argv[2:])
-        return
+        return 0
     if len(sys.argv) > 1 and sys.argv[1] == "analyze":
         analyst_main(sys.argv[2:])
-        return
+        return 0
+    if len(sys.argv) > 1 and sys.argv[1] == "logs":
+        return logs_main(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "collect":
+        return collect_main(sys.argv[2:])
     parser = argparse.ArgumentParser(description="Sentinel terminal security monitor")
     parser.add_argument("--alert-file", default=os.path.expanduser("~/.sentinel_alerts.jsonl"))
     parser.add_argument("--database-file", default=os.path.expanduser("~/.sentinel.db"))
