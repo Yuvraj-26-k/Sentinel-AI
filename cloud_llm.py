@@ -4,7 +4,10 @@ The API key is read only from GEMINI_API_KEY and is never printed or persisted.
 """
 
 import os
+import json
 import requests
+
+from evidence_validator import EVIDENCE_FIELDS, INVESTIGATION_STEPS
 
 
 def _generate(prompt):
@@ -24,12 +27,19 @@ def _generate(prompt):
 
 
 def explain_alert(alert):
-    return _generate(
-        "You are Sentinel, a defensive SOC assistant. Analyze only this alert. "
-        "Return a short classification, confidence, explanation, and safe next steps. "
-        "Do not recommend automatic blocking or destructive actions. Alert: "
-        + repr(alert)
+    evidence_fields = sorted(field for field in EVIDENCE_FIELDS if field in alert)
+    step_ids = sorted(INVESTIGATION_STEPS)
+    response = _generate(
+        "You are a defensive security analyst. Select only telemetry evidence fields "
+        "that are present in the supplied alert, and choose investigation step IDs "
+        "from the supplied allow-list. Do not write prose, infer intent, claim a "
+        "compromise, or recommend response actions. Return one JSON object with "
+        '"evidence": [{"field": field_name, "value": exact_value_from_alert}], '
+        'and "investigation_steps": [allowed_step_id]. '
+        f"\nAllowed fields: {evidence_fields}\nAllowed steps: {step_ids}"
+        f"\nAlert: {json.dumps(alert, sort_keys=True)}"
     )
+    return json.loads(response) if response else None
 
 
 def chat(message, context=""):

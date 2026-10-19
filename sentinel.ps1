@@ -21,18 +21,32 @@ if (-not (Get-Service -Name Sysmon64 -ErrorAction SilentlyContinue)) {
 
 $AlertFile = if ($env:SENTINEL_ALERT_FILE) { $env:SENTINEL_ALERT_FILE } else { Join-Path $HOME ".sentinel_alerts.jsonl" }
 $ModelFile = if ($env:SENTINEL_MODEL_FILE) { $env:SENTINEL_MODEL_FILE } else { Join-Path $HOME ".nmap_ai_baseline.json" }
-$LogFile = if ($env:SENTINEL_LOG_FILE) { $env:SENTINEL_LOG_FILE } else { Join-Path $Root "firewall.log" }
+$DatabaseFile = if ($env:SENTINEL_DATABASE_FILE) { $env:SENTINEL_DATABASE_FILE } else { Join-Path $HOME ".sentinel.db" }
+$ApiPort = if ($env:SENTINEL_API_PORT) { $env:SENTINEL_API_PORT } else { "8000" }
+$Source = if ($env:SENTINEL_SOURCE) { $env:SENTINEL_SOURCE } elseif ($env:SENTINEL_LOG_FILE) { "windows-firewall" } else { "windows-native" }
 
-Write-Host "[Sentinel] Windows does not use UFW. Monitoring: $LogFile"
+$env:SENTINEL_DATABASE_FILE = $DatabaseFile
+$DetectorArguments = @("smart_detector.py", "--source", $Source, "--model-file", $ModelFile, "--alert-file", $AlertFile, "--database-file", $DatabaseFile)
+if ($env:SENTINEL_LOG_FILE) {
+    $DetectorArguments += @("--log-file", $env:SENTINEL_LOG_FILE)
+}
+Write-Host "[Sentinel] Starting ingestion source: $Source"
 $Detector = Start-Process -FilePath ".venv\Scripts\python.exe" `
-    -ArgumentList "smart_detector.py", "--log-file", $LogFile, "--model-file", $ModelFile, "--alert-file", $AlertFile `
+    -ArgumentList ($DetectorArguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) `
+    -PassThru -NoNewWindow
+$Api = Start-Process -FilePath ".venv\Scripts\python.exe" `
+    -ArgumentList "-m uvicorn api:app --host 127.0.0.1 --port $ApiPort" `
     -PassThru -NoNewWindow
 
 try {
+    Write-Host "[Sentinel] Read-only alert API available at http://127.0.0.1:$ApiPort/api/health"
     & ".venv\Scripts\python.exe" sentinel.py --alert-file $AlertFile
 }
 finally {
     if ($Detector -and -not $Detector.HasExited) {
         Stop-Process -Id $Detector.Id -Force
+    }
+    if ($Api -and -not $Api.HasExited) {
+        Stop-Process -Id $Api.Id -Force
     }
 }
