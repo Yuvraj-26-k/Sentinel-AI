@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
+
+PYTHON=${PYTHON:-python3}
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    printf 'Sentinel: %s was not found; install Python 3.10 or newer.\n' "$PYTHON" >&2
+    exit 1
+fi
+if ! "$PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+    printf 'Sentinel: Python 3.10 or newer is required.\n' >&2
+    exit 1
+fi
+
+if [ ! -x .venv/bin/python ]; then
+    "$PYTHON" -m venv .venv
+fi
+
+.venv/bin/python -m pip install -e .
+exec .venv/bin/python -m sentinel "$@"

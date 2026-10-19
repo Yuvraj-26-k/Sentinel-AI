@@ -61,24 +61,22 @@ git clone https://github.com/Yuvraj-26-k/Sentinel-AI.git
 cd Sentinel-AI
 ```
 
-On Linux, install the `sentinel` command once:
+On Linux, enter the cloned repository and start Sentinel with its repo-local
+launcher:
 
 ### Linux
 
 ```sh
-sh install_sentinel.sh
+./sentinel
 ```
 
-This is a one-time command registration: it creates `.venv`, installs the
-project, and puts a user-level `sentinel` launcher in `~/.local/bin`. Manual
-environment activation is not required. If `~/.local/bin` is missing from
-`PATH`, the installer asks before adding it to `~/.profile`; open a new shell
-afterward. If you decline, use the printed `export` command for that shell.
-Afterward, use only `sentinel`: each run creates the environment if missing,
-checks/installs project dependencies, and starts the bot. It does not fetch Git
-updates or run system package commands. Pull source updates with Git when
-wanted; the next `sentinel` launch refreshes the editable install automatically.
-The first interactive launch opens the feature dashboard and latest-report panel.
+This one command creates `.venv` if needed, installs or refreshes dependencies,
+and starts the bot; manual environment activation is not required. It does not
+fetch Git updates or run system package commands. After pulling source updates,
+run `./sentinel` again. The first interactive launch opens the feature
+dashboard and latest-report panel. Linux shells do not search the current
+directory for commands by default, so use `./sentinel`; typing bare `sentinel`
+requires adding a launcher to `PATH`.
 
 On first launch with the default UFW source, Sentinel checks whether UFW and
 its log are available. If UFW is missing, it offers to install it using the
@@ -140,7 +138,7 @@ alert console with one command:
 sentinel
 ```
 
-On Linux, use the user-level launcher installed above. On macOS and Windows,
+On Linux, run `./sentinel` from the repository. On macOS and Windows,
 activate the virtual environment from the installation steps; in Windows
 PowerShell, if script activation is restricted, run
 `.\.venv\Scripts\sentinel.exe`. The automatic monitor uses
