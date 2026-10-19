@@ -42,8 +42,11 @@ from sentinel import (
     analyze_log_file,
     collect_main as sentinel_module_collect_main,
     collect_evidence,
+    hash_file,
+    hash_main as sentinel_module_hash_main,
     logs_main as sentinel_module_logs_main,
     main as sentinel_main,
+    password_main as sentinel_module_password_main,
 )
 
 # --- test_event_adapters.py ---
@@ -640,6 +643,107 @@ class EvidenceAnalystTests(unittest.TestCase):
 
 # --- test_sentinel_ui.py ---
 class SentinelUiTests(unittest.TestCase):
+    def test_hashing_streams_file_and_writes_exclusive_digest_report(self):
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory, "evidence.bin")
+            content = b"private evidence" * 100000
+            source.write_bytes(content)
+            report_path = Path(directory, "digest.txt")
+
+            report = hash_file(source)
+
+            self.assertIn("Algorithm: SHA-256", report)
+            self.assertIn(hashlib.sha256(content).hexdigest(), report)
+            self.assertNotIn("private evidence", report)
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(
+                    sentinel_module_hash_main(
+                        [str(source), "--algorithm", "sha512", "--output", str(report_path)]
+                    ),
+                    0,
+                )
+            self.assertEqual(report_path.read_text(encoding="utf-8"), stdout.getvalue())
+            existing_report = report_path.read_text(encoding="utf-8")
+
+            with redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as raised:
+                    sentinel_module_hash_main(
+                        [str(source), "--output", str(report_path)]
+                    )
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("cannot create report", stderr.getvalue())
+            self.assertEqual(report_path.read_text(encoding="utf-8"), existing_report)
+
+            with redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as raised:
+                    sentinel_module_hash_main(
+                        [str(source), "--output", str(source)]
+                    )
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("refusing to write report over input file", stderr.getvalue())
+            self.assertEqual(source.read_bytes(), content)
+
+    def test_password_generator_only_reveals_secret_to_interactive_terminal(self):
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            with patch("sentinel.secrets.choice") as choose:
+                with self.assertRaises(SystemExit) as raised:
+                    sentinel_module_password_main(["generate", "--length", "12"])
+            self.assertEqual(raised.exception.code, 1)
+            choose.assert_not_called()
+            self.assertNotIn("Generated password", stdout.getvalue())
+
+        stdout = TTYBuffer()
+        with (
+            patch("sentinel.sys.stdout", stdout),
+            patch("sentinel.secrets.choice", return_value="x") as choose,
+        ):
+            self.assertEqual(
+                sentinel_module_password_main(["generate", "--length", "12"]),
+                0,
+            )
+        self.assertEqual(choose.call_count, 12)
+        self.assertEqual(stdout.getvalue().count("x" * 12), 1)
+        self.assertIn("shown once; not saved", stdout.getvalue())
+
+        with self.assertRaises(SystemExit):
+            with (
+                patch("sentinel.sys.stdout", TTYBuffer()),
+                patch("sentinel.secrets.choice") as choose,
+            ):
+                sentinel_module_password_main(["generate", "--length", "257"])
+        choose.assert_not_called()
+
+    def test_password_checker_hides_input_and_reports_only_heuristic_checks(self):
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        stdout = TTYBuffer()
+        with (
+            patch("sentinel.sys.stdout", stdout),
+            patch("sentinel.sys.stdin.isatty", return_value=True),
+            patch("sentinel.getpass.getpass", return_value="Secret123!"),
+        ):
+            self.assertEqual(sentinel_module_password_main(["check"]), 0)
+        self.assertIn("heuristic (not an entropy estimate)", stdout.getvalue())
+        self.assertIn("minimum length: pass", stdout.getvalue())
+        self.assertNotIn("Secret123!", stdout.getvalue())
+
+        weak_stdout = TTYBuffer()
+        with (
+            patch("sentinel.sys.stdout", weak_stdout),
+            patch("sentinel.sys.stdin.isatty", return_value=True),
+            patch("sentinel.getpass.getpass", return_value="weak"),
+        ):
+            self.assertEqual(sentinel_module_password_main(["check"]), 1)
+        self.assertIn("minimum length: fail", weak_stdout.getvalue())
+
     def test_logs_command_reports_file_metrics_and_validated_indicators(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory, "sample.log")
@@ -759,6 +863,61 @@ class SentinelUiTests(unittest.TestCase):
             self.assertEqual(sentinel_main(), 3)
         collect.assert_called_once_with(["evidence"])
 
+        with (
+            patch.object(sys, "argv", ["sentinel", "hash", "evidence.bin"]),
+            patch("sentinel.hash_main", return_value=4) as hash_command,
+        ):
+            self.assertEqual(sentinel_main(), 4)
+        hash_command.assert_called_once_with(["evidence.bin"])
+
+        with (
+            patch.object(sys, "argv", ["sentinel", "password", "generate"]),
+            patch("sentinel.password_main", return_value=5) as password_command,
+        ):
+            self.assertEqual(sentinel_main(), 5)
+        password_command.assert_called_once_with(["generate"])
+
+    def test_interactive_assistant_routes_tools_and_explains_model_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with patch("sentinel.logs_main") as logs:
+                    self.assertTrue(terminal.answer('analyze logs "C:\\Case Files\\App.log"'))
+                logs.assert_called_once_with(["C:\\Case Files\\App.log"])
+
+                with patch("sentinel.collect_main") as collect:
+                    self.assertTrue(terminal.answer('collect evidence "Evidence Folder"'))
+                collect.assert_called_once_with(["Evidence Folder"])
+
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    self.assertTrue(terminal.answer("how does scan detection work?"))
+                self.assertIn("recorded network telemetry", stdout.getvalue())
+                self.assertIn("not general AI knowledge", stdout.getvalue())
+
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    self.assertTrue(terminal.answer("does the ML know general facts?"))
+                self.assertIn("not a general-purpose language model", stdout.getvalue())
+
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    self.assertTrue(terminal.answer("help"))
+                self.assertIn("password generate", stdout.getvalue())
+                self.assertIn("hash FILE", stdout.getvalue())
+
+                with patch.object(terminal, "_explain_latest") as explain:
+                    self.assertTrue(terminal.answer("analyze"))
+                    self.assertTrue(terminal.answer("analyze alert"))
+                self.assertEqual(explain.call_count, 2)
+
+                with patch("sentinel.analyst_main") as analyst_command:
+                    self.assertTrue(terminal.answer("analyze --source 192.0.2.1"))
+                analyst_command.assert_called_once_with(["--source", "192.0.2.1"])
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
     def test_terminal_command_starts_and_stops_monitor_automatically(self):
         from unittest.mock import Mock
         import threading
@@ -802,6 +961,28 @@ class SentinelUiTests(unittest.TestCase):
             sentinel_main()
 
         launch.assert_not_called()
+
+    def test_no_animation_option_disables_startup_progress_effects(self):
+        import threading
+        from unittest.mock import Mock
+
+        terminal = Mock()
+        terminal.stop = threading.Event()
+        with (
+            patch("sentinel.subprocess.Popen") as launch,
+            patch("sentinel.Sentinel", return_value=terminal),
+            patch("sentinel.banner"),
+            patch("sentinel.scan_animation") as animation,
+            patch("sentinel.loading") as loading,
+            patch("builtins.input", side_effect=EOFError),
+            patch.object(sys, "argv", ["sentinel", "--no-monitor", "--no-animation"]),
+        ):
+            sentinel_main()
+
+        launch.assert_not_called()
+        animation.assert_called_once_with(enabled=False)
+        self.assertTrue(loading.called)
+        self.assertTrue(all(call.kwargs["enabled"] is False for call in loading.call_args_list))
 
     def test_alert_store_migrates_existing_database_and_deduplicates(self):
         with tempfile.TemporaryDirectory() as directory:
