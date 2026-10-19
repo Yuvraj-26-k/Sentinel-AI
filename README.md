@@ -31,6 +31,13 @@ an attack.
 - **Intent-aware terminal assistant:** routes familiar requests to local log,
   evidence, hashing, and alert tools, and explains Sentinel's behavioral
   detection scope without presenting it as general AI knowledge.
+- **NLP + RAG analyst agent:** normalizes common wording and inflections to
+  Sentinel intents, retrieves relevant local security guidance, and joins
+  retrieved context with alert analysis while keeping guidance distinct from
+  incident evidence.
+- **Optional LLM:** Gemini can perform consent-gated web research with Google
+  Search citations and evidence-constrained alert assistance. It is not a
+  guaranteed source of truth; local detection and retrieval work without it.
 - **Animated terminal experience:** colored startup banner, scanning progress
   animation, live incident output, and animated, colored prompts that also color
   typed commands. Prompt animation and colors are disabled in non-interactive
@@ -154,6 +161,7 @@ The console accepts these commands:
 | `password generate` / `password check` | Generate or check a secret interactively |
 | `features` | Clear the screen and show features with a latest-report panel |
 | `report` | Show the latest non-secret report |
+| Natural-language question | Search local RAG; ask before optional web research |
 | `help` | Show commands |
 | `quit` | Exit the console |
 
@@ -168,16 +176,24 @@ saving a report under `~/.sentinel/reports/`; decline to keep it on screen only.
 Generated passwords are never included in saved reports. `features` shows a
 two-panel overview; its feature list does not show scan history.
 
-### Online research and privacy
+### NLP, RAG, analyst agent, and online LLM
 
-Set `GEMINI_API_KEY` and, optionally, `GEMINI_WEB_MODEL` to enable current web
-research through Gemini Google Search grounding. For each free-form online
-question, Sentinel asks before sending that question to Google/Gemini. It does
-not attach alerts or local logs to a web-research query. `explain` separately
-asks before sending alert telemetry for cloud evidence selection. Answers show
-available citations and an uncertainty warning; search coverage, sources, and
-model output can be wrong or incomplete, so verify important information with
-primary sources. Without a key, local monitoring and tools continue to work.
+Natural-language commands are routed locally using token normalization,
+common inflections, and intent phrases. General questions first search a small
+local security knowledge base (built-in triage notes plus optional Markdown
+files in `knowledge/`). The bounded analyst agent combines retrieved guidance
+with the recorded alert's deterministic evidence analysis; retrieved text is
+marked as guidance, never incident evidence.
+
+Set `GEMINI_API_KEY` and, optionally, `GEMINI_WEB_MODEL` to enable online
+Google Search-grounded LLM research. For each web question, Sentinel asks
+before sending the question to Gemini/Search and does not attach local logs or
+alerts. `explain` separately asks before sending alert telemetry to Gemini for
+evidence selection. Answers show available citations and an uncertainty
+warning; coverage, sources, and model output can be wrong or incomplete, so
+verify important information with primary sources. There is no 100% accuracy
+guarantee. Without a key, local detection, intent routing, and RAG continue to
+work offline.
 
 ### Analyze logs and collect evidence files
 

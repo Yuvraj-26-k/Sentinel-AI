@@ -178,6 +178,108 @@ def verified_ai_analysis(alert, proposal):
     return result
 
 
+QUERY_STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "can", "do", "for", "from",
+    "how", "i", "in", "is", "it", "me", "of", "on", "or", "the", "this",
+    "these", "that", "to", "was", "what", "when", "where", "which", "with",
+    "you",
+}
+
+
+def _normalize_query_tokens(text):
+    tokens = TOKEN_RE.findall(text.lower())
+    normalized = []
+    for token in tokens:
+        if token in QUERY_STOP_WORDS:
+            continue
+        if token.endswith("ies") and len(token) > 4:
+            token = token[:-3] + "y"
+        elif token.endswith("ing") and len(token) > 5:
+            token = token[:-3]
+        elif token.endswith("ed") and len(token) > 4:
+            token = token[:-2]
+        elif (
+            token.endswith("s")
+            and len(token) > 3
+            and not token.endswith(("ss", "us", "is"))
+        ):
+            token = token[:-1]
+        normalized.append(token)
+    return normalized
+
+
+INTENT_EXAMPLES = {
+    "features": (
+        "features",
+        "capabilities",
+        "what can you do",
+        "what can sentinel do",
+        "what can sentinel do for me",
+        "show me the tools",
+        "open menu",
+    ),
+    "help": ("help", "commands", "how do i use sentinel"),
+    "status": ("status", "recent alerts", "show incidents", "what happened"),
+    "explain": ("explain alert", "analyze alert", "why is this alert", "triage incident"),
+    "logs": ("analyze log", "inspect log", "log statistics", "log file"),
+    "collect": ("collect evidence", "list evidence", "evidence files"),
+    "hash": ("hash file", "file digest", "sha256"),
+    "password": ("password generator", "generate password", "check password strength"),
+    "scan_guidance": ("port scan", "nmap scan", "scan detection", "detect scans"),
+    "ml_scope": ("machine learning", "isolation forest", "anomaly model", "ml model"),
+}
+
+
+def classify_intent(query):
+    """Classify common Sentinel requests using normalized phrase and token matches."""
+    normalized_query = " ".join(_normalize_query_tokens(query))
+    original = " ".join(TOKEN_RE.findall(query.lower()))
+    for intent, examples in INTENT_EXAMPLES.items():
+        if original in examples:
+            return intent
+    token_sets = {
+        "features": {"feature", "capability", "tool", "menu", "do"},
+        "help": {"help", "command", "usage"},
+        "status": {"status", "recent", "alert", "incident", "happened"},
+        "explain": {"explain", "why", "triage", "alert", "incident"},
+        "logs": {"log", "analyze", "inspect", "statistics", "error"},
+        "collect": {"collect", "evidence", "directory", "folder"},
+        "hash": {"hash", "digest", "sha256", "sha512", "file"},
+        "password": {"password", "passphrase", "generator", "generate"},
+        "scan_guidance": {"scan", "nmap", "port", "syn", "probe"},
+        "ml_scope": {"machine", "learning", "isolation", "forest", "anomaly", "model"},
+    }
+    priorities = (
+        "explain",
+        "scan_guidance",
+        "ml_scope",
+        "password",
+        "collect",
+        "hash",
+        "logs",
+        "status",
+        "features",
+        "help",
+    )
+    query_tokens = set(normalized_query.split())
+    scored = []
+    for priority, intent in enumerate(priorities):
+        expected = token_sets[intent]
+        matches = query_tokens & expected
+        if not matches:
+            continue
+        score = len(matches) / max(len(expected), 1)
+        if intent == "features" and {"what", "sentinel"} <= set(original.split()):
+            score += 0.3
+        if intent == "explain" and "alert" in query_tokens:
+            score += 0.4
+        if score >= 0.34:
+            scored.append((score, -priority, intent))
+    if scored:
+        return max(scored)[2]
+    return "unknown"
+
+
 def format_analysis(analysis):
     lines = [
         f"Assessment: {analysis['assessment']}",
@@ -314,23 +416,116 @@ DEFAULT_GUIDANCE = """
 A scan is more credible when multiple signals agree: unique destination ports, probe rate, repeated activity, or a baseline anomaly. Confirm the source is not an approved scanner; correlate firewall events with Zeek or Suricata; review exposed services; preserve timestamps; never automatically block based on one alert. Firewall-only logs may miss slow or distributed scans.
 """
 
+DEFAULT_KNOWLEDGE = (
+    (
+        "port-scan-detection",
+        DEFAULT_GUIDANCE,
+    ),
+    (
+        "nmap-scan-interpretation",
+        "Nmap is a network mapping tool used by administrators and testers. "
+        "A SYN scan sends TCP SYN probes and can appear as incomplete connection "
+        "attempts. A vertical scan probes many ports on one host; a horizontal "
+        "scan checks one or a few ports across multiple hosts. Authorized scans "
+        "can be benign; validate ownership, authorization, timing, and corroborating "
+        "telemetry before drawing conclusions.",
+    ),
+    (
+        "firewall-telemetry-limits",
+        "Firewall logs show only events captured by that firewall and its logging "
+        "configuration. Missing records do not prove that traffic did not occur. "
+        "A blocked connection is not by itself proof of compromise. Preserve event "
+        "timestamps, source and destination, action, and original event identifiers.",
+    ),
+    (
+        "isolation-forest-scope",
+        "Isolation Forest is an unsupervised anomaly-scoring method. It identifies "
+        "behavior that differs from its available training history; its score is "
+        "not a probability of maliciousness or a trained benign-versus-malicious "
+        "classification. New or sparse baselines may be unreliable.",
+    ),
+    (
+        "suricata-zeek-correlation",
+        "Suricata EVE JSON can provide network flow and alert records. Zeek "
+        "connection logs summarize observed connections and their history. "
+        "Correlate sensor records with firewall and endpoint telemetry using "
+        "timestamps and endpoints; account for clock skew, NAT, sensor placement, "
+        "and missing fields.",
+    ),
+)
+
+
 class KnowledgeBase:
     def __init__(self, directory):
-        self.documents = [("built-in-port-scan-triage", DEFAULT_GUIDANCE)]
+        self.documents = list(DEFAULT_KNOWLEDGE)
         for path in sorted(Path(directory).glob("*.md")) if Path(directory).exists() else []:
             text = path.read_text(encoding="utf-8")
             self.documents.append((path.name, text))
 
     def search(self, query, limit=3):
-        wanted = set(TOKEN_RE.findall(query.lower()))
+        query_tokens = _normalize_query_tokens(query)
+        wanted = set(query_tokens)
+        if not wanted:
+            return []
         ranked = []
         for name, text in self.documents:
-            words = TOKEN_RE.findall(text.lower())
-            score = sum(words.count(token) for token in wanted)
+            words = _normalize_query_tokens(text)
+            word_counts = {word: words.count(word) for word in set(words)}
+            matches = wanted & word_counts.keys()
+            if len(matches) < min(2, len(wanted)):
+                continue
+            coverage = len(matches) / len(wanted)
+            score = sum(min(word_counts[word], 3) for word in matches) + coverage
+            document_bigrams = set(zip(words, words[1:]))
+            if any(
+                bigram in document_bigrams
+                for bigram in zip(query_tokens, query_tokens[1:])
+            ):
+                score += 1
             if score:
                 ranked.append((score, name, text))
-        ranked.sort(reverse=True)
-        return ranked[:limit]
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return ranked[:max(0, limit)]
+
+
+class LocalSecurityAgent:
+    """A bounded local RAG agent: retrieve guidance and analyze supplied alerts."""
+
+    def __init__(self, knowledge_dir="knowledge"):
+        self.knowledge = KnowledgeBase(knowledge_dir)
+
+    def answer(self, query, limit=3):
+        intent = classify_intent(query)
+        retrieved = self.knowledge.search(query, limit=limit)
+        return {
+            "intent": intent,
+            "documents": [
+                {
+                    "document": name,
+                    "score": score,
+                    "excerpt": text[:700],
+                }
+                for score, name, text in retrieved
+            ],
+        }
+
+    def analyze_alert(self, alert, limit=3):
+        analysis = local_analysis(alert)
+        query = " ".join(
+            str(value)
+            for value in (
+                alert.get("event"),
+                alert.get("rule_signals"),
+                alert.get("protocol"),
+                alert.get("source_type"),
+                "port scan investigation evidence",
+            )
+            if value is not None
+        )
+        return {
+            "analysis": analysis,
+            "retrieved_guidance": self.answer(query, limit=limit)["documents"],
+        }
 
 
 class SecurityAgent:

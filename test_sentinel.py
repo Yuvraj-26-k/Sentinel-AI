@@ -32,7 +32,10 @@ from detection import (
 )
 from analyst import (
     AlertStore,
+    KnowledgeBase,
+    LocalSecurityAgent,
     SecurityAgent,
+    classify_intent,
     local_analysis,
     validate_analysis,
     verified_ai_analysis,
@@ -644,6 +647,29 @@ class EvidenceAnalystTests(unittest.TestCase):
         self.assertTrue(result["investigation_steps"])
         self.assertTrue(any("Isolation Forest flagged" in item for item in result["rationale"]))
 
+    def test_nlp_intent_router_handles_synonyms_and_inflections(self):
+        self.assertEqual(classify_intent("what can Sentinel do for me?"), "features")
+        self.assertEqual(classify_intent("why did this alert trigger?"), "explain")
+        self.assertEqual(classify_intent("help me inspect these logs"), "logs")
+        self.assertEqual(classify_intent("nmap scans across many ports"), "scan_guidance")
+        self.assertEqual(classify_intent("show recent incidents"), "status")
+        self.assertEqual(classify_intent("unrelated question about ocean tides"), "unknown")
+
+    def test_local_rag_retrieves_normalized_nmap_guidance(self):
+        knowledge = KnowledgeBase("knowledge")
+        results = knowledge.search("How do Nmap SYN scans find open ports?")
+        self.assertTrue(results)
+        self.assertEqual(results[0][1], "nmap-scan-interpretation")
+        self.assertIn("Authorized scans", results[0][2])
+
+    def test_local_agent_keeps_retrieved_guidance_separate_from_alert_evidence(self):
+        agent = LocalSecurityAgent()
+        result = agent.analyze_alert(self.alert)
+        self.assertEqual(result["analysis"]["classification"], "possible_port_scan")
+        self.assertTrue(result["analysis"]["evidence"])
+        self.assertTrue(result["retrieved_guidance"])
+        self.assertIn("document", result["retrieved_guidance"][0])
+
 # --- test_sentinel_ui.py ---
 class SentinelUiTests(unittest.TestCase):
     def test_interactive_prompt_animates_and_colors_prompt_and_typed_input(self):
@@ -962,6 +988,33 @@ class SentinelUiTests(unittest.TestCase):
                 if terminal.store:
                     terminal.store.engine.dispose()
 
+    def test_natural_language_question_uses_local_rag_before_online_search(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch("sentinel.web_research") as research,
+                    patch("sentinel.Sentinel._offer_save_report"),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertTrue(terminal.answer("How do Nmap SYN scans work?"))
+                research.assert_not_called()
+                self.assertIn(
+                    "nmap-scan-interpretation", terminal.latest_report
+                )
+                self.assertIn(
+                    "guidance, not alert evidence", terminal.latest_report
+                )
+                with patch("sys.stdout", new_callable=io.StringIO):
+                    self.assertTrue(terminal.answer("analyze what is an Nmap scan"))
+                self.assertIn("nmap-scan-interpretation", terminal.latest_report)
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
     def test_online_research_requires_consent_and_offers_cited_report(self):
         with tempfile.TemporaryDirectory() as directory:
             terminal = Sentinel(
@@ -983,8 +1036,10 @@ class SentinelUiTests(unittest.TestCase):
                     patch("builtins.input", side_effect=("yes", "n")),
                     patch("sys.stdout", new_callable=io.StringIO) as stdout,
                 ):
-                    self.assertTrue(terminal.answer("What is a SYN scan?"))
-                research.assert_called_once_with("What is a SYN scan?")
+                    self.assertTrue(
+                        terminal.answer("What is today's Gemini API pricing?")
+                    )
+                research.assert_called_once_with("What is today's Gemini API pricing?")
                 self.assertIn("https://example.org", terminal.latest_report)
                 self.assertIn("may be incomplete or incorrect", stdout.getvalue())
             finally:

@@ -22,10 +22,11 @@ from datetime import datetime
 from pathlib import Path
 from analyst import (
     AlertStore,
+    LocalSecurityAgent,
     analyst_main,
+    classify_intent,
     explain_alert as explain_with_gemini,
     format_analysis,
-    local_analysis,
     verified_ai_analysis,
     web_research,
 )
@@ -624,6 +625,7 @@ class Sentinel:
         self.stop = threading.Event()
         self.position = 0
         self.latest_report = ""
+        self.agent = LocalSecurityAgent()
 
     def load_existing(self):
         try:
@@ -690,9 +692,17 @@ class Sentinel:
             lexer.escape = ""
             tokens = list(lexer)
         except ValueError as error:
-            print(f"Sentinel: Could not parse command ({error}). Use 'help' for examples.")
-            return True
+            if command.split(maxsplit=1)[0].lower() in {
+                "logs", "collect", "hash", "password", "analyze",
+            }:
+                print(
+                    f"Sentinel: Could not parse command ({error}). "
+                    "Use 'help' for examples."
+                )
+                return True
+            tokens = command.split()
         lowered_tokens = [token.lower() for token in tokens]
+        intent = classify_intent(command)
         if tokens and lowered_tokens[0] in {"logs", "collect", "hash", "password"}:
             command_handlers = {
                 "logs": logs_main,
@@ -719,21 +729,25 @@ class Sentinel:
         elif lowered_tokens and lowered_tokens[0] == "analyze":
             if len(tokens) > 1 and tokens[1].startswith("--"):
                 self._run_cli_handler(analyst_main, tokens[1:])
+            elif intent == "explain" and len(tokens) > 1 and "alert" in lowered_tokens:
+                self._explain_latest()
             elif len(tokens) > 1 and lowered_tokens[1] != "alert":
-                self._online_lookup(" ".join(tokens[1:]))
+                query = " ".join(tokens[1:])
+                if not self._show_rag_answer(query):
+                    self._online_lookup(query)
             else:
                 self._explain_latest()
         elif normalized in {"analysis", "analyze alert", "alert analysis"}:
             self._explain_latest()
         elif normalized in {
             "help", "?", "commands", "what can you do", "capabilities",
-        } or "help" in normalized:
+        } or "help" in normalized or intent == "help":
             self._show_help()
-        elif normalized in {"features", "feature", "menu", "home"}:
+        elif normalized in {"features", "feature", "menu", "home"} or intent == "features":
             self._show_features()
         elif normalized in {"report", "reports", "show report"}:
             self._show_report()
-        elif normalized in {"status", "what happened", "what happened?", "recent", "alerts"}:
+        elif normalized in {"status", "what happened", "what happened?", "recent", "alerts"} or intent == "status":
             self._clear_screen()
             stored = self.store.recent(5) if self.store else []
             if not self.alerts and not stored:
@@ -749,9 +763,9 @@ class Sentinel:
                         f"{event.get('source')} | {event.get('event')} | "
                         f"{incident_id}"
                     )
-        elif any(word in normalized for word in ("explain", "incident", "alert")):
+        elif any(word in normalized for word in ("explain", "incident", "alert")) or intent == "explain":
             self._explain_latest()
-        elif any(
+        elif intent == "scan_guidance" or any(
             phrase in normalized
             for phrase in (
                 "scan detection",
@@ -761,17 +775,46 @@ class Sentinel:
             )
         ):
             self._show_scan_guidance()
-        elif any(word in normalized for word in ("log", "logs")):
+            self._show_rag_answer(command)
+        elif intent == "logs" or any(word in normalized for word in ("log", "logs")):
             print("Sentinel: For file-level log statistics and indicators, run "
                   "'logs PATH' or 'analyze logs PATH'. This does not analyze "
                   "network telemetry.")
-        elif any(word in normalized for word in ("evidence", "collect")):
+        elif intent == "collect" or any(word in normalized for word in ("evidence", "collect")):
             print("Sentinel: To list evidence-file metadata, run "
                   "'collect DIRECTORY' or 'analyze evidence DIRECTORY'.")
-        elif any(word in normalized for word in ("model", "machine learning", "anomaly", "ml ")):
+        elif intent == "hash":
+            print(
+                "Sentinel: Hash a file with 'hash PATH' "
+                "or 'sentinel hash PATH --algorithm sha256'."
+            )
+        elif intent == "password":
+            print(
+                "Sentinel: Use 'password generate --length 20' or 'password check'. "
+                "Secrets are never sent to an LLM or saved."
+            )
+        elif intent == "ml_scope" or any(word in normalized for word in ("model", "machine learning", "anomaly", "ml ")):
             self._show_analysis_scope()
         else:
-            self._online_lookup(command)
+            if not self._show_rag_answer(command):
+                self._online_lookup(command)
+        return True
+
+    def _show_rag_answer(self, query):
+        rag_result = self.agent.answer(query)
+        if not rag_result["documents"]:
+            return False
+        lines = [
+            "Local knowledge-base retrieval (guidance, not alert evidence):"
+        ]
+        lines.extend(
+            f"- {document['document']} (match {document['score']}): "
+            f"{document['excerpt']}"
+            for document in rag_result["documents"]
+        )
+        self.latest_report = "\n".join(lines)
+        self._show_report()
+        self._offer_save_report()
         return True
 
     def _online_lookup(self, query):
@@ -880,6 +923,8 @@ class Sentinel:
             "Behavioral anomaly scoring with Isolation Forest",
             "Incident aggregation, SQLite history and duplicate handling",
             "Evidence-backed explanations and investigation steps",
+            "NLP intent routing, local RAG retrieval and analyst agent",
+            "Optional consent-gated Gemini LLM with Google Search citations",
             "Local log statistics and validated IP indicators",
             "Evidence-file metadata collection",
             "Streaming SHA-2 file hashing",
@@ -993,8 +1038,13 @@ class Sentinel:
             print("Sentinel: There is no alert to explain.")
             return
         event = self.alerts[-1]
-        analysis = local_analysis(event)
+        agent_result = self.agent.analyze_alert(event)
+        analysis = agent_result["analysis"]
         print("Sentinel evidence-bound analysis:\n" + format_analysis(analysis))
+        if agent_result["retrieved_guidance"]:
+            print("Retrieved local guidance (not incident evidence):")
+            for guidance in agent_result["retrieved_guidance"]:
+                print(f"- {guidance['document']}: {guidance['excerpt']}")
         ai_analysis = None
         if explain_with_gemini and os.getenv("GEMINI_API_KEY"):
             try:
@@ -1020,11 +1070,18 @@ class Sentinel:
                 print("AI-selected approved investigation steps:")
                 for step in ai_analysis["investigation_steps"]:
                     print(f"- {step}")
-        report = "\n".join((
+        report_lines = [
             "Sentinel evidence-bound analysis:",
             format_analysis(analysis),
-            self.render(event),
-        ))
+        ]
+        if agent_result["retrieved_guidance"]:
+            report_lines.append("Retrieved local guidance (not incident evidence):")
+            report_lines.extend(
+                f"- {item['document']}: {item['excerpt']}"
+                for item in agent_result["retrieved_guidance"]
+            )
+        report_lines.append(self.render(event))
+        report = "\n".join(report_lines)
         print(self.render(event))
         self.latest_report = report
         self._offer_save_report()
