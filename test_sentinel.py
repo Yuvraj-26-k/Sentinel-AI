@@ -1276,17 +1276,14 @@ class SentinelUiTests(unittest.TestCase):
                 with patch("sys.stdout", output):
                     self.assertTrue(terminal.answer("menu"))
                 rendered = output.getvalue()
-                self.assertIn("SENTINEL OPTIONS", rendered)
+                self.assertIn("SENTINEL MAIN MENU", rendered)
                 self.assertIn("1  Status", rendered)
                 self.assertIn("2  Recent alerts", rendered)
                 self.assertIn("3  Explain latest alert", rendered)
                 self.assertIn("4  Search Google", rendered)
-                self.assertIn("7  Analyze a log file", rendered)
-                self.assertIn("8  Collect evidence files", rendered)
-                self.assertIn("9  Hash a file", rendered)
-                self.assertIn("10  Generate a password", rendered)
-                self.assertIn("11  Check password composition", rendered)
-                self.assertIn("12  Quit", rendered)
+                self.assertIn("6  Tools", rendered)
+                self.assertIn("7  Help", rendered)
+                self.assertIn("8  Exit", rendered)
                 self.assertNotIn("FEATURES", rendered)
                 self.assertNotIn("LATEST REPORT", rendered)
                 self.assertNotIn("Example saved-safe report", rendered)
@@ -1307,9 +1304,9 @@ class SentinelUiTests(unittest.TestCase):
                     patch.object(terminal, "_explain_latest") as explain,
                 ):
                     self.assertTrue(terminal.answer("5"))
-                    self.assertTrue(terminal.answer("6"))
+                    self.assertTrue(terminal.answer("7"))
                     self.assertTrue(terminal.answer("3"))
-                    self.assertFalse(terminal.answer("12"))
+                    self.assertFalse(terminal.answer("8"))
                 report.assert_called_once_with()
                 help_menu.assert_called_once_with()
                 explain.assert_called_once_with()
@@ -1319,9 +1316,9 @@ class SentinelUiTests(unittest.TestCase):
 
     def test_numbered_file_tools_prompt_for_path_and_use_existing_handlers(self):
         cases = (
-            ("7", "logs_main", "sample.log", ["sample.log"]),
-            ("8", "collect_main", "evidence", ["evidence"]),
-            ("9", "hash_main", "capture.pcap", ["capture.pcap"]),
+            ("1", "logs_main", "sample.log", ["sample.log"]),
+            ("2", "collect_main", "evidence", ["evidence"]),
+            ("3", "hash_main", "capture.pcap", ["capture.pcap"]),
         )
         for choice, handler_name, value, expected_args in cases:
             with self.subTest(choice=choice), tempfile.TemporaryDirectory() as directory:
@@ -1332,10 +1329,14 @@ class SentinelUiTests(unittest.TestCase):
                 try:
                     with (
                         patch(f"sentinel.{handler_name}") as handler,
-                        patch("builtins.input", return_value=value),
+                        patch(
+                            "builtins.input",
+                            side_effect=(choice, value, "1", "5"),
+                        ),
+                        patch("sys.stdout", new_callable=io.StringIO),
                         patch.object(terminal, "_offer_save_report"),
                     ):
-                        self.assertTrue(terminal.answer(choice))
+                        self.assertTrue(terminal.answer("6"))
                     handler.assert_called_once_with(expected_args)
                 finally:
                     if terminal.store:
@@ -1350,15 +1351,42 @@ class SentinelUiTests(unittest.TestCase):
             try:
                 with (
                     patch("sentinel.password_main") as password_handler,
-                    patch("builtins.input", return_value="32"),
+                    patch("builtins.input", side_effect=("4", "1", "32", "1", "2", "2")),
+                    patch("sys.stdout", new_callable=io.StringIO),
                 ):
-                    self.assertTrue(terminal.answer("10"))
-                    password_handler.assert_called_once_with(
-                        ["generate", "--length", "32"]
+                    self.assertTrue(terminal.answer("6"))
+                    password_handler.assert_has_calls(
+                        [
+                            unittest.mock.call(["generate", "--length", "32"]),
+                            unittest.mock.call(["check"]),
+                        ]
                     )
-                    password_handler.reset_mock()
-                    self.assertTrue(terminal.answer("11"))
-                    password_handler.assert_called_once_with(["check"])
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_tools_and_password_submenus_navigate_back_or_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch("builtins.input", side_effect=("5",)),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertTrue(terminal.answer("6"))
+                with (
+                    patch("builtins.input", side_effect=("4", "3", "6")),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertFalse(terminal.answer("6"))
+                with (
+                    patch("builtins.input", side_effect=("4", "4")),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertFalse(terminal.answer("6"))
             finally:
                 if terminal.store:
                     terminal.store.engine.dispose()

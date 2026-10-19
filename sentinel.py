@@ -710,45 +710,19 @@ class Sentinel:
     def answer(self, command):
         command = command.strip()
         normalized = command.lower()
-        if normalized == "12" or normalized in {"quit", "exit", "q"}:
+        if normalized == "8" or normalized in {"quit", "exit", "q"}:
             return False
         menu_commands = {
             "1": "status",
             "2": "alerts",
             "3": "explain",
             "5": "report",
-            "6": "help",
         }
-        if normalized in {"7", "8", "9"}:
-            prompts = {
-                "7": ("Log file path: ", logs_main),
-                "8": ("Evidence directory: ", collect_main),
-                "9": ("File to hash: ", hash_main),
-            }
-            prompt, handler = prompts[normalized]
-            try:
-                path = _prompt_input(prompt).strip()
-            except (EOFError, KeyboardInterrupt):
-                path = ""
-            if path:
-                self._run_report_command(handler, [path])
-            else:
-                print("Action cancelled; no path was provided.")
+        if normalized == "7":
+            self._show_help()
             return True
-        if normalized in {"10", "11"}:
-            action = "generate" if normalized == "10" else "check"
-            arguments = [action]
-            if action == "generate":
-                try:
-                    length = _prompt_input(
-                        "Password length (8-256, default 20): "
-                    ).strip()
-                except (EOFError, KeyboardInterrupt):
-                    length = ""
-                if length:
-                    arguments.extend(("--length", length))
-            self._run_cli_handler(password_main, arguments)
-            return True
+        if normalized == "6":
+            return self._run_tools_menu()
         if normalized == "4":
             try:
                 query = _prompt_input("Google question: ").strip()
@@ -1058,6 +1032,14 @@ class Sentinel:
         if sys.stdout.isatty():
             print("\033[2J\033[H", end="")
 
+    @staticmethod
+    def _read_navigation_choice(prompt="Select an option: "):
+        try:
+            return _prompt_input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nNavigation cancelled.")
+            return None
+
     def _show_menu(self):
         options = (
             ("1", "Status"),
@@ -1065,21 +1047,122 @@ class Sentinel:
             ("3", "Explain latest alert"),
             ("4", "Search Google (browser sign-in on first use)"),
             ("5", "Latest report"),
-            ("6", "Help"),
-            ("7", "Analyze a log file"),
-            ("8", "Collect evidence files"),
-            ("9", "Hash a file"),
-            ("10", "Generate a password"),
-            ("11", "Check password composition"),
-            ("12", "Quit"),
+            ("6", "Tools"),
+            ("7", "Help"),
+            ("8", "Exit"),
         )
-        print(f"\n{BLUE}╭─ SENTINEL OPTIONS {'─' * 42}{RESET}")
+        print(f"\n{BLUE}╭─ SENTINEL MAIN MENU {'─' * 40}{RESET}")
         for number, label in options:
             print(f"{BLUE}│{RESET} {CYAN}{number}{RESET}  {label}")
         print(
             f"{BLUE}╰{'─' * 61}{RESET}\n"
-            f"{DIM}Choose a number or type a question / command.{RESET}"
+            f"{DIM}Choose a number, or type a question / command.{RESET}"
         )
+
+    @staticmethod
+    def _show_tools_menu():
+        options = (
+            ("1", "Analyze a log file"),
+            ("2", "Collect evidence files"),
+            ("3", "Hash a file"),
+            ("4", "Password tools"),
+            ("5", "Back to Main Menu"),
+            ("6", "Exit"),
+        )
+        print(f"\n{BLUE}╭─ TOOLS MENU {'─' * 48}{RESET}")
+        for number, label in options:
+            print(f"{BLUE}│{RESET} {CYAN}{number}{RESET}  {label}")
+        print(f"{BLUE}╰{'─' * 61}{RESET}")
+
+    @staticmethod
+    def _show_password_menu():
+        options = (
+            ("1", "Generate a password"),
+            ("2", "Check password composition"),
+            ("3", "Back to Tools"),
+            ("4", "Exit"),
+        )
+        print(f"\n{BLUE}╭─ PASSWORD TOOLS {'─' * 44}{RESET}")
+        for number, label in options:
+            print(f"{BLUE}│{RESET} {CYAN}{number}{RESET}  {label}")
+        print(f"{BLUE}╰{'─' * 61}{RESET}")
+
+    @staticmethod
+    def _show_tool_navigation(back_label):
+        print(f"\n{BLUE}╭─ NEXT {'─' * 54}{RESET}")
+        print(f"{BLUE}│{RESET} {CYAN}1{RESET}  Back to {back_label}")
+        print(f"{BLUE}│{RESET} {CYAN}2{RESET}  Main Menu")
+        print(f"{BLUE}│{RESET} {CYAN}3{RESET}  Exit")
+        print(f"{BLUE}╰{'─' * 61}{RESET}")
+
+    def _run_tools_menu(self):
+        handlers = {
+            "1": ("Log file path: ", logs_main),
+            "2": ("Evidence directory: ", collect_main),
+            "3": ("File to hash: ", hash_main),
+        }
+        while True:
+            self._show_tools_menu()
+            choice = self._read_navigation_choice("Tools: ")
+            if choice is None or choice == "5":
+                self._show_menu()
+                return True
+            if choice == "6":
+                return False
+            if choice == "4":
+                destination = self._run_password_menu()
+                if destination == "exit":
+                    return False
+                if destination == "main":
+                    self._show_menu()
+                    return True
+                continue
+            if choice not in handlers:
+                print("Choose a listed Tools option.")
+                continue
+
+            prompt, handler = handlers[choice]
+            path = self._read_navigation_choice(prompt)
+            if path:
+                self._run_report_command(handler, [path])
+            else:
+                print("Action cancelled; no path was provided.")
+            self._show_tool_navigation("Tools")
+            navigation = self._read_navigation_choice("Next: ")
+            if navigation == "2":
+                self._show_menu()
+                return True
+            if navigation == "3":
+                return False
+
+    def _run_password_menu(self):
+        while True:
+            self._show_password_menu()
+            choice = self._read_navigation_choice("Password tools: ")
+            if choice is None or choice == "3":
+                return "tools"
+            if choice == "4":
+                return "exit"
+            if choice == "1":
+                arguments = ["generate"]
+                length = self._read_navigation_choice(
+                    "Password length (8-256, default 20): "
+                )
+                if length:
+                    arguments.extend(("--length", length))
+                self._run_cli_handler(password_main, arguments)
+            elif choice == "2":
+                self._run_cli_handler(password_main, ["check"])
+            else:
+                print("Choose a listed Password Tools option.")
+                continue
+
+            self._show_tool_navigation("Password Tools")
+            navigation = self._read_navigation_choice("Next: ")
+            if navigation == "2":
+                return "main"
+            if navigation == "3":
+                return "exit"
 
     @staticmethod
     def _show_online_setup():
@@ -1104,10 +1187,8 @@ class Sentinel:
             ("hash FILE", "Calculate a SHA-2 digest without printing file contents"),
             ("password generate", "Generate a one-time, securely random password"),
             ("password check", "Check password composition without echoing it"),
-            ("7", "Menu: analyze a log file"),
-            ("8", "Menu: collect evidence metadata"),
-            ("9", "Menu: hash a file"),
-            ("10 / 11", "Menu: generate/check password securely"),
+            ("6", "Open nested Tools and Password menus"),
+            ("menu", "Return to the main navigation menu"),
             ("help", "Show these commands"),
             ("quit", "Stop Sentinel and its monitor"),
         )

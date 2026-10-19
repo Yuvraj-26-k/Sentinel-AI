@@ -150,7 +150,7 @@ and its monitor. Use `sentinel --no-monitor` to open only the console.
 Use `sentinel --no-animation` to skip the startup progress effects while
 keeping the banner and interactive console.
 
-The startup menu also accepts numbered choices:
+The main navigation menu offers:
 
 | Number | Action |
 | --- | --- |
@@ -159,13 +159,14 @@ The startup menu also accepts numbered choices:
 | `3` | Explain the latest alert |
 | `4` | Search Google |
 | `5` | Show the latest report |
-| `6` | Help |
-| `7` | Analyze a log file |
-| `8` | Collect evidence files from a directory |
-| `9` | Hash a file |
-| `10` | Generate a password |
-| `11` | Check password composition |
-| `12` | Quit |
+| `6` | Open Tools submenu |
+| `7` | Help |
+| `8` | Exit |
+
+The **Tools** submenu contains log analysis, evidence collection, file hashing,
+and a nested password-tools menu. Each tool has navigation to go back to its
+parent menu, return to the main menu, or exit Sentinel. The password submenu
+also has explicit Back and Exit options.
 
 You can also type commands or ask questions directly:
 
@@ -192,8 +193,8 @@ show the newest alert using its recorded evidence.
 
 Interactive file analysis, hashing, explanations, and online answers ask before
 saving a report under `~/.sentinel/reports/`; decline to keep it on screen only.
-Generated passwords are never included in saved reports. The numbered menu
-launches the same log analysis, evidence collection, hashing, and password
+Generated passwords are never included in saved reports. The navigation menus
+launch the same log analysis, evidence collection, hashing, and password
 utilities available through text commands.
 
 ### NLP, RAG, analyst agent, and online LLM
