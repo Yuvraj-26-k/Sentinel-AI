@@ -69,14 +69,16 @@ On Linux, install the `sentinel` command once:
 sh install_sentinel.sh
 ```
 
-This creates `.venv`, installs the project, and installs a user-level `sentinel`
-launcher in `~/.local/bin`. Manual environment activation is not required. If
-`~/.local/bin` is missing from `PATH`, the installer asks before adding it to
-`~/.profile`; open a new shell afterward. If you decline, use the printed
-`export` command for that shell. After pulling source updates, re-run the
-installer if project dependencies changed. It does not fetch Git updates or
-run system package commands. The first interactive launch opens the feature
-dashboard and latest-report panel.
+This is a one-time command registration: it creates `.venv`, installs the
+project, and puts a user-level `sentinel` launcher in `~/.local/bin`. Manual
+environment activation is not required. If `~/.local/bin` is missing from
+`PATH`, the installer asks before adding it to `~/.profile`; open a new shell
+afterward. If you decline, use the printed `export` command for that shell.
+Afterward, use only `sentinel`: each run creates the environment if missing,
+checks/installs project dependencies, and starts the bot. It does not fetch Git
+updates or run system package commands. Pull source updates with Git when
+wanted; the next `sentinel` launch refreshes the editable install automatically.
+The first interactive launch opens the feature dashboard and latest-report panel.
 
 On first launch with the default UFW source, Sentinel checks whether UFW and
 its log are available. If UFW is missing, it offers to install it using the

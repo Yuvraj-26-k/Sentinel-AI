@@ -46,10 +46,18 @@ launcher.write_text(
     f"ROOT={root}\n"
     "VENV=\"$ROOT/.venv\"\n"
     "PYTHON=${PYTHON:-python3}\n"
+    "if ! command -v \"$PYTHON\" >/dev/null 2>&1; then\n"
+    "    printf 'Sentinel: %s was not found; install Python 3.10 or newer.\\n' \"$PYTHON\" >&2\n"
+    "    exit 1\n"
+    "fi\n"
+    "if ! \"$PYTHON\" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then\n"
+    "    printf 'Sentinel: Python 3.10 or newer is required.\\n' >&2\n"
+    "    exit 1\n"
+    "fi\n"
     "if [ ! -x \"$VENV/bin/python\" ]; then\n"
     "    \"$PYTHON\" -m venv \"$VENV\"\n"
-    "    \"$VENV/bin/python\" -m pip install -e \"$ROOT\"\n"
     "fi\n"
+    "\"$VENV/bin/python\" -m pip install -e \"$ROOT\"\n"
     "exec \"$VENV/bin/python\" -m sentinel \"$@\"\n",
     encoding="utf-8",
 )
