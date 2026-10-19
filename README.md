@@ -24,8 +24,8 @@ an attack.
   analysis can only surface alert evidence and approved investigation steps.
 - **Conversational assistant:** ordinary messages and questions go to Gemini
   chat after consent. Requests for current information or `google QUESTION`
-  use Google Search grounding and return citations when available. Both require
-  a Gemini API key; answers can be incomplete or incorrect.
+  use Google Search grounding and return citations when available. Chat requires
+  a Gemini API key; Google Search uses browser-based Google OAuth.
 - **Opt-in file utilities:** coarse analysis of one local text log and
   non-recursive metadata collection for selected evidence-file extensions,
   plus streaming SHA-2 file hashing.
@@ -51,7 +51,8 @@ an attack.
 - Python 3.10 or newer
 - Internet access for the initial dependency installation
 - Permission to read the selected firewall or sensor log
-- Optional: `GEMINI_API_KEY` for user-approved online search and cloud analysis
+- Optional: `GEMINI_API_KEY` for consent-gated Gemini chat and alert explanations
+- Optional: Google Cloud Desktop OAuth client JSON for browser-authenticated search
 
 ## Installation
 
@@ -202,27 +203,49 @@ conversation instead of being guessed into a command from keywords. With
 `GEMINI_API_KEY`, normal messages and questions go to Gemini chat and continue
 with follow-ups; a bounded recent conversation is held in memory for the current
 console. Requests for up-to-date information and `google QUESTION` use Google
-Search grounding. Relevant chat requests can retrieve from a small local
-security knowledge base (built-in triage notes plus optional Markdown files in
-`knowledge/`) and supply those excerpts as context.
+Search grounding with browser-based OAuth. Relevant chat requests can retrieve
+from a small local security knowledge base (built-in triage notes plus optional
+Markdown files in `knowledge/`) and supply those excerpts as context.
 The bounded analyst agent combines retrieved guidance with the recorded alert's
 deterministic evidence analysis; retrieved text is marked as guidance, never
 incident evidence. Without an API key, matching local guidance is displayed
-instead of a generated answer.
+instead of a generated chat answer; browser OAuth for Google Search is a
+separate sign-in flow.
 
-Set `GEMINI_API_KEY` and, optionally, `GEMINI_WEB_MODEL` to enable conversational
-answers and online research. Chat asks before sending the message, up to eight
-recent chat turns, and relevant retrieved guidance. A web search asks before
-sending the query plus up to four recent turns. Chat history stays in memory
-for the current console only. Sentinel does not attach local logs or alerts to
-normal chat. Use `google QUESTION` or explicitly ask for current information to
-search Google. Citations are shown when available, and Sentinel asks before
-every external request.
-To enable it, sign in to Google AI Studio with a Google account, create a
-Gemini API key, and set `GEMINI_API_KEY` in the shell before starting Sentinel.
-Google Search grounding is provided through that Gemini API authorization;
-ChatGPT login or an OpenAI account is not currently supported. API availability,
-quotas, and any charges are subject to Google's account and API terms.
+Set `GEMINI_API_KEY` to enable consent-gated Gemini chat and alert explanations.
+Chat asks before sending the message, up to eight recent chat turns, and relevant
+retrieved guidance. Chat history stays in memory for the current console only.
+Sentinel does not attach local logs or alerts to normal chat.
+
+Google Search uses a Google Cloud Desktop OAuth client instead of an API key.
+In Google Cloud Console, enable the Generative Language API, configure the
+OAuth consent screen (add your Google account as a test user if the app is in
+testing), create a Desktop app OAuth client, and download its JSON.
+Place it at `~/.sentinel/google-oauth-client.json`, or set
+`GEMINI_OAUTH_CLIENT_FILE` to its path. The client JSON must include its Cloud
+project ID; alternatively, set `GEMINI_OAUTH_PROJECT_ID`. Use `google QUESTION`
+or choose **4** in the menu. After you approve sending the query, Sentinel
+opens your browser for Google sign-in on first use. It saves the refresh token
+under `~/.sentinel/google-oauth-token.json` with owner-only permissions on
+Unix-like systems and refreshes it for later searches. Remove that token file
+to sign out. Searches ask before transmitting the query and do not attach alert
+or log contents. Citations are shown when available; answers can be incomplete
+or incorrect. Google controls API availability, quotas, and charges.
+
+For example, on Linux/macOS:
+
+```sh
+export GEMINI_OAUTH_CLIENT_FILE="$HOME/path/to/google-oauth-client.json"
+```
+
+In PowerShell:
+
+```powershell
+$env:GEMINI_OAUTH_CLIENT_FILE = "C:\path\to\google-oauth-client.json"
+```
+
+The browser-based sign-in is cached securely for later menu selections and
+refreshed as needed.
 `explain` separately asks before sending alert telemetry to Gemini for evidence
 selection. Answers can be wrong or incomplete; verify important information
 with primary sources. There is no 100% accuracy guarantee. Without a key, local

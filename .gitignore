@@ -3,3 +3,7 @@ __pycache__/
 *.py[cod]
 *.tmp
 *.egg-info/
+/google-oauth-client*.json
+/google-oauth-token*.json
+/client_secret*.json
+/token.json

@@ -3,6 +3,7 @@ import json
 import os
 import re
 import requests
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -296,6 +297,121 @@ def format_analysis(analysis):
     return "\n".join(lines)
 
 # --- cloud_llm.py ---
+GOOGLE_OAUTH_SCOPES = (
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/generative-language.retriever",
+)
+
+
+def _start_google_oauth_flow(config_path):
+    try:
+        from google_auth_oauthlib.flow import InstalledAppFlow
+    except ImportError as error:
+        raise RuntimeError(
+            "Google OAuth support is unavailable; reinstall Sentinel dependencies."
+        ) from error
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(config_path), GOOGLE_OAUTH_SCOPES
+    )
+    return flow.run_local_server(port=0, open_browser=True)
+
+
+def _google_oauth_credentials():
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+    except ImportError as error:
+        raise RuntimeError(
+            "Google OAuth support is unavailable; reinstall Sentinel dependencies."
+        ) from error
+
+    config_path = Path(
+        os.environ.get(
+            "GEMINI_OAUTH_CLIENT_FILE",
+            Path.home() / ".sentinel" / "google-oauth-client.json",
+        )
+    ).expanduser()
+    token_path = Path(
+        os.environ.get(
+            "GEMINI_OAUTH_TOKEN_FILE",
+            Path.home() / ".sentinel" / "google-oauth-token.json",
+        )
+    ).expanduser()
+    try:
+        client_config = json.loads(config_path.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise RuntimeError(
+            "Google sign-in needs a Desktop OAuth client JSON file. Set "
+            "GEMINI_OAUTH_CLIENT_FILE or place google-oauth-client.json under "
+            f"{Path.home() / '.sentinel'}."
+        ) from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"Google OAuth client file is invalid JSON: {config_path}") from error
+
+    if not isinstance(client_config, dict):
+        raise RuntimeError("Google OAuth client file must contain a JSON object.")
+    installed = client_config.get("installed")
+    if not isinstance(installed, dict):
+        raise RuntimeError(
+            "Google OAuth client file must be a Desktop app client JSON "
+            "containing an 'installed' section."
+        )
+    project_id = os.environ.get("GEMINI_OAUTH_PROJECT_ID") or client_config.get(
+        "project_id"
+    )
+    if not isinstance(project_id, str) or not project_id.strip():
+        raise RuntimeError(
+            "Google OAuth client file is missing project_id; set "
+            "GEMINI_OAUTH_PROJECT_ID to your Google Cloud project ID."
+        )
+
+    credentials = None
+    if token_path.exists():
+        try:
+            credentials = Credentials.from_authorized_user_file(
+                str(token_path), GOOGLE_OAUTH_SCOPES
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"Saved Google sign-in is invalid; remove {token_path} and sign in again."
+            ) from error
+
+    if credentials and not credentials.valid and credentials.refresh_token:
+        credentials.refresh(Request())
+    elif not credentials or not credentials.valid:
+        credentials = _start_google_oauth_flow(config_path)
+
+    if not credentials or not credentials.valid or not credentials.token:
+        raise RuntimeError("Google sign-in did not return a valid access token.")
+
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=token_path.parent,
+            prefix=f".{token_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as token_file:
+            temporary_path = Path(token_file.name)
+            token_file.write(credentials.to_json())
+            token_file.flush()
+            os.fsync(token_file.fileno())
+        if os.name != "nt":
+            temporary_path.chmod(0o600)
+        os.replace(temporary_path, token_path)
+        if os.name != "nt":
+            token_path.chmod(0o600)
+    except OSError as error:
+        if temporary_path and temporary_path.exists():
+            temporary_path.unlink()
+        raise RuntimeError(f"Could not securely save Google sign-in: {error}") from error
+
+    return credentials, project_id.strip()
+
+
 def _generate(prompt):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -364,19 +480,22 @@ def chat(message, context="", history=None):
 
 def web_research(query):
     """Ask Gemini to search the web and return its answer with URL citations."""
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "online research requires GEMINI_API_KEY; no question was sent"
-        )
     query = query.strip()
     if not query or len(query) > 4000:
         raise ValueError("online research questions must contain 1 to 4000 characters")
+    credentials, project_id = _google_oauth_credentials()
+    if not credentials.token:
+        raise RuntimeError(
+            "Google sign-in did not return an access token; no question was sent."
+        )
 
     model = os.getenv("GEMINI_WEB_MODEL", "gemini-3.8-flash")
     response = requests.post(
         "https://generativelanguage.googleapis.com/v1beta/interactions",
-        headers={"x-goog-api-key": api_key},
+        headers={
+            "Authorization": f"Bearer {credentials.token}",
+            "x-goog-user-project": project_id,
+        },
         json={
             "model": model,
             "input": (

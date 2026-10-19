@@ -731,9 +731,9 @@ class SentinelUiTests(unittest.TestCase):
         ) as stdout:
             Sentinel._show_online_setup()
         output = stdout.getvalue()
-        self.assertIn("Google account", output)
-        self.assertIn("Gemini API key", output)
-        self.assertIn("ChatGPT login is not supported", output)
+        self.assertIn("Gemini chat needs GEMINI_API_KEY", output)
+        self.assertIn("browser-based Google OAuth", output)
+        self.assertIn("GEMINI_OAUTH_CLIENT_FILE", output)
 
     def test_hashing_streams_file_and_writes_exclusive_digest_report(self):
         import hashlib
@@ -1107,6 +1107,31 @@ class SentinelUiTests(unittest.TestCase):
                 if terminal.store:
                     terminal.store.engine.dispose()
 
+    def test_current_information_search_uses_oauth_without_gemini_api_key(self):
+        query = "What is the latest Python release?"
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch.dict("os.environ", {}, clear=True),
+                    patch(
+                        "sentinel.web_research",
+                        return_value={"answer": "A current release.", "sources": []},
+                    ) as research,
+                    patch("builtins.input", side_effect=("yes", "no")),
+                    patch("sentinel.Sentinel._offer_save_report"),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertTrue(terminal.answer(query))
+                research.assert_called_once_with(query)
+                self.assertIn("A current release.", terminal.latest_report)
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
     def test_natural_language_with_command_keywords_still_uses_conversation(self):
         query = "Can you help me understand how the anomaly model works?"
         with tempfile.TemporaryDirectory() as directory:
@@ -1141,7 +1166,7 @@ class SentinelUiTests(unittest.TestCase):
             )
             try:
                 with (
-                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch.dict("os.environ", {}, clear=True),
                     patch(
                         "sentinel.web_research",
                         return_value={
@@ -1150,6 +1175,7 @@ class SentinelUiTests(unittest.TestCase):
                         },
                     ) as research,
                     patch("builtins.input", side_effect=("yes", "no")),
+                    patch("sentinel.Sentinel._offer_save_report"),
                     patch("sys.stdout", new_callable=io.StringIO),
                 ):
                     self.assertTrue(terminal.answer(f"google {query}"))
@@ -1697,8 +1723,13 @@ class SentinelUiTests(unittest.TestCase):
                 }
             ]
         }
+        credentials = unittest.mock.Mock(token="oauth-access-token")
         with (
-            patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+            patch.dict("os.environ", {}, clear=True),
+            patch(
+                "analyst._google_oauth_credentials",
+                return_value=(credentials, "sentinel-test-project"),
+            ),
             patch("analyst.requests.post", return_value=response) as post,
         ):
             result = analyst.web_research("How does feature X work?")
@@ -1712,13 +1743,91 @@ class SentinelUiTests(unittest.TestCase):
             post.call_args.kwargs["json"]["tools"],
             [{"type": "google_search"}],
         )
+        self.assertEqual(
+            post.call_args.kwargs["headers"],
+            {
+                "Authorization": "Bearer oauth-access-token",
+                "x-goog-user-project": "sentinel-test-project",
+            },
+        )
 
-    def test_google_search_grounding_requires_api_key_before_request(self):
+    def test_google_search_grounding_uses_browser_oauth_flow(self):
+        flow = unittest.mock.Mock()
+        credentials = unittest.mock.Mock(token="oauth-access-token")
+        flow.run_local_server.return_value = credentials
+        with patch(
+            "google_auth_oauthlib.flow.InstalledAppFlow.from_client_secrets_file",
+            return_value=flow,
+        ) as create_flow:
+            self.assertIs(
+                analyst._start_google_oauth_flow(Path("client.json")),
+                credentials,
+            )
+        create_flow.assert_called_once_with(
+            "client.json", analyst.GOOGLE_OAUTH_SCOPES
+        )
+        flow.run_local_server.assert_called_once_with(port=0, open_browser=True)
+
+    def test_google_oauth_credentials_cache_browser_login_for_later_searches(self):
+        class Credentials:
+            valid = True
+            refresh_token = "refresh-token"
+            token = "access-token"
+
+            def to_json(self):
+                return '{"refresh_token":"refresh-token"}'
+
+        with tempfile.TemporaryDirectory() as directory:
+            client_path = Path(directory, "client.json")
+            token_path = Path(directory, "oauth", "token.json")
+            client_path.write_text(
+                json.dumps(
+                    {
+                        "project_id": "sentinel-test-project",
+                        "installed": {
+                            "client_id": "desktop-client",
+                            "client_secret": "not-a-real-secret",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "GEMINI_OAUTH_CLIENT_FILE": str(client_path),
+                        "GEMINI_OAUTH_TOKEN_FILE": str(token_path),
+                    },
+                ),
+                patch(
+                    "analyst._start_google_oauth_flow",
+                    return_value=Credentials(),
+                ) as start_flow,
+            ):
+                credentials, project_id = analyst._google_oauth_credentials()
+
+            start_flow.assert_called_once_with(client_path)
+            self.assertEqual(credentials.token, "access-token")
+            self.assertEqual(project_id, "sentinel-test-project")
+            self.assertTrue(token_path.is_file())
+            self.assertEqual(
+                json.loads(token_path.read_text(encoding="utf-8")),
+                {"refresh_token": "refresh-token"},
+            )
+            if sys.platform != "win32":
+                self.assertEqual(token_path.stat().st_mode & 0o777, 0o600)
+
+    def test_google_search_grounding_requires_oauth_before_request(self):
         with (
             patch.dict("os.environ", {}, clear=True),
+            patch(
+                "analyst._google_oauth_credentials",
+                side_effect=RuntimeError("Google OAuth client file is missing"),
+            ),
             patch("analyst.requests.post") as post,
         ):
-            with self.assertRaisesRegex(RuntimeError, "GEMINI_API_KEY"):
+            with self.assertRaisesRegex(RuntimeError, "OAuth client file"):
                 analyst.web_research("test")
         post.assert_not_called()
 

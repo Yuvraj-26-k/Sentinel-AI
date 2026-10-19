@@ -867,7 +867,7 @@ class Sentinel:
             f"[{item['document']}]\n{item['excerpt']}"
             for item in retrieved
         )
-        if not os.getenv("GEMINI_API_KEY"):
+        if not os.getenv("GEMINI_API_KEY") and not use_web_search:
             if (
                 classify_intent(query) == "scan_guidance"
                 or "scan detection" in query.lower()
@@ -963,13 +963,11 @@ class Sentinel:
         return True
 
     def _online_lookup(self, query):
-        if not os.getenv("GEMINI_API_KEY"):
-            self._show_online_setup()
-            return
         try:
             consent = _prompt_input(
-                "Send this question to Gemini with Google Search? "
-                "The question is sent externally; no alert or log data is attached. [y/N] "
+                "Send this question to Google Gemini Search? The question is sent "
+                "externally; no alert or log data is attached. Sign-in may open "
+                "your browser the first time. [y/N] "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             consent = ""
@@ -1065,7 +1063,7 @@ class Sentinel:
             ("1", "Status"),
             ("2", "Recent alerts"),
             ("3", "Explain latest alert"),
-            ("4", "Search Google"),
+            ("4", "Search Google (browser sign-in on first use)"),
             ("5", "Latest report"),
             ("6", "Help"),
             ("7", "Analyze a log file"),
@@ -1085,16 +1083,12 @@ class Sentinel:
 
     @staticmethod
     def _show_online_setup():
-        if os.getenv("GEMINI_API_KEY"):
-            print("Online research is unavailable because no compatible web-search response was returned.")
-        else:
-            print(
-                "Conversational AI and Google Search need a Gemini API key. "
-                "Sign in to Google AI Studio with a Google account, create a "
-                "Gemini API key, then set GEMINI_API_KEY in this terminal before "
-                "starting Sentinel. Sentinel uses Gemini API authorization; "
-                "ChatGPT login is not supported."
-            )
+        print(
+            "Gemini chat needs GEMINI_API_KEY. Google Search uses browser-based "
+            "Google OAuth; configure a Google Cloud Desktop OAuth client JSON "
+            "file with GEMINI_OAUTH_CLIENT_FILE before using option 4. "
+            "See README.md for setup."
+        )
 
     def _show_help(self):
         rows = (

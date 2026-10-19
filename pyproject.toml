@@ -12,6 +12,8 @@ dependencies = [
   "requests>=2.31,<3",
   "SQLAlchemy>=2.0,<3",
   "scikit-learn>=1.4,<2",
+  "google-auth>=2.29,<3",
+  "google-auth-oauthlib>=1.2,<2",
 ]
 
 [project.scripts]
