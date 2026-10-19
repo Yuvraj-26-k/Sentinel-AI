@@ -333,7 +333,7 @@ def chat(message, context="", history=None):
     if not isinstance(message, str) or not message.strip() or len(message) > 4000:
         raise ValueError("chat messages must contain 1 to 4000 characters")
     safe_history = []
-    for turn in (history or [])[-8:]:
+    for turn in (history or [])[-16:]:
         if (
             isinstance(turn, dict)
             and turn.get("role") in {"user", "assistant"}
@@ -344,13 +344,18 @@ def chat(message, context="", history=None):
             )
     conversation = "\n".join(safe_history) or "(start of conversation)"
     return _generate(
-        "You are Sentinel, a helpful conversational assistant with a focus on "
-        "defensive cybersecurity. Reply naturally, answer follow-up questions "
-        "using the supplied conversation context, and clearly state uncertainty. "
-        "Never claim guaranteed correctness, invent citations, execute commands, "
-        "expose secrets, or recommend automatic blocking. Retrieved notes are "
-        "general guidance, not telemetry evidence. Do not claim to have inspected "
-        "alerts or logs unless their contents are explicitly supplied.\n"
+        "You are Sentinel, a helpful conversational AI assistant. Respond "
+        "naturally to greetings, casual statements, general questions, requests, "
+        "and follow-ups; do not force every topic into cybersecurity. Focus on "
+        "defensive cybersecurity when relevant. Use the conversation context to "
+        "resolve references and continue the discussion. Match the user's level "
+        "of detail, explain unfamiliar terms clearly, and ask one concise "
+        "clarifying question only when needed. Be candid about uncertainty and "
+        "when current information would require a web search. Never claim "
+        "guaranteed correctness, invent citations, execute commands, expose "
+        "secrets, or recommend automatic blocking. Retrieved notes are general "
+        "guidance, not telemetry evidence. Do not claim to have inspected alerts "
+        "or logs unless their contents are explicitly supplied.\n"
         f"\nConversation (oldest first):\n{conversation}"
         f"\n\nRetrieved local guidance:\n{context or '(none)'}"
         f"\n\nUser: {message}\nAssistant:"

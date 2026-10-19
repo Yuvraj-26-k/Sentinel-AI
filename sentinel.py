@@ -651,7 +651,7 @@ class Sentinel:
         self.position = 0
         self.latest_report = ""
         self.agent = LocalSecurityAgent()
-        self.chat_history = deque(maxlen=8)
+        self.chat_history = deque(maxlen=16)
 
     def load_existing(self):
         try:
@@ -790,15 +790,15 @@ class Sentinel:
                 self._explain_latest()
         elif normalized in {"explain", "analysis", "analyze alert", "alert analysis"}:
             self._explain_latest()
-        elif normalized in {
-            "help", "?", "commands", "what can you do", "capabilities",
-        } or "help" in normalized or intent == "help":
+        elif normalized in {"help", "?", "commands"}:
             self._show_help()
-        elif normalized in {"features", "feature", "menu", "home"} or intent == "features":
+        elif normalized in {"features", "feature", "menu", "home"}:
             self._show_menu()
         elif normalized in {"report", "reports", "show report"}:
             self._show_report()
-        elif normalized in {"status", "what happened", "what happened?", "recent", "alerts"} or intent == "status":
+        elif normalized in {
+            "status", "what happened", "what happened?", "recent", "alerts",
+        }:
             self._clear_screen()
             stored = self.store.recent(5) if self.store else []
             if not self.alerts and not stored:
@@ -814,62 +814,9 @@ class Sentinel:
                         f"{event.get('source')} | {event.get('event')} | "
                         f"{incident_id}"
                     )
-        elif self._is_natural_question(command) and not any(
-            word in lowered_tokens for word in ("alert", "incident")
-        ):
-            self._conversational_answer(command)
-        elif intent == "explain" or (
-            any(word in lowered_tokens for word in ("incident", "alert"))
-            and any(word in lowered_tokens for word in ("explain", "why", "analyze", "analysis"))
-        ):
-            self._explain_latest()
-        elif intent == "scan_guidance" or any(
-            phrase in normalized
-            for phrase in (
-                "scan detection",
-                "how does sentinel detect",
-                "how do i configure detection",
-                "monitor status",
-            )
-        ):
-            if self._is_natural_question(command):
-                self._conversational_answer(command)
-            else:
-                self._show_scan_guidance()
-                self._show_rag_answer(command)
-        elif intent == "logs" or any(word in normalized for word in ("log", "logs")):
-            print("Sentinel: For file-level log statistics and indicators, run "
-                  "'logs PATH' or 'analyze logs PATH'. This does not analyze "
-                  "network telemetry.")
-        elif intent == "collect" or any(word in normalized for word in ("evidence", "collect")):
-            print("Sentinel: To list evidence-file metadata, run "
-                  "'collect DIRECTORY' or 'analyze evidence DIRECTORY'.")
-        elif intent == "hash":
-            print(
-                "Sentinel: Hash a file with 'hash PATH' "
-                "or 'sentinel hash PATH --algorithm sha256'."
-            )
-        elif intent == "password":
-            print(
-                "Sentinel: Use 'password generate --length 20' or 'password check'. "
-                "Secrets are never sent to an LLM or saved."
-            )
-        elif intent == "ml_scope" or any(word in normalized for word in ("model", "machine learning", "anomaly", "ml ")):
-            self._show_analysis_scope()
         else:
             self._conversational_answer(command)
         return True
-
-    @staticmethod
-    def _is_natural_question(query):
-        normalized = query.strip().lower()
-        return (
-            "?" in normalized
-            or normalized.startswith(
-                ("what ", "how ", "why ", "when ", "where ", "who ", "can you ",
-                 "could you ", "would you ", "tell me ", "explain ", "describe ")
-            )
-        )
 
     @staticmethod
     def _requests_current_web(query):
@@ -877,7 +824,7 @@ class Sentinel:
         return any(
             phrase in normalized
             for phrase in (
-                "search the web", "search online", "look online", "look up online",
+                "search ", "search the web", "search online", "look online", "look up online",
                 "on the internet", "latest ", "current ", "today's ", "today ",
                 "right now", "up to date", "recent news",
             )
@@ -885,9 +832,7 @@ class Sentinel:
 
     def _conversational_answer(self, query):
         retrieved = self.agent.answer(query)["documents"]
-        use_web_search = (
-            self._is_natural_question(query) or self._requests_current_web(query)
-        )
+        use_web_search = self._requests_current_web(query)
         local_context = "\n\n".join(
             f"[{item['document']}]\n{item['excerpt']}"
             for item in retrieved
@@ -912,8 +857,8 @@ class Sentinel:
             )
         else:
             consent_text = (
-                "Send this question, up to 8 recent chat turns, and relevant "
-                "local guidance to Gemini? The question is sent externally; "
+                "Send this message, up to 8 recent chat turns, and relevant "
+                "local guidance to Gemini? The message is sent externally; "
                 "no alerts or log contents are attached. [y/N] "
             )
         try:
@@ -927,7 +872,7 @@ class Sentinel:
         if use_web_search:
             history_context = "\n".join(
                 f"{turn['role']}: {turn['text']}"
-                for turn in list(self.chat_history)[-4:]
+                for turn in list(self.chat_history)[-8:]
             )
             research_query = (
                 f"Recent conversation:\n{history_context}\n\nQuestion:\n{query}"
@@ -1109,10 +1054,11 @@ class Sentinel:
             print("Online research is unavailable because no compatible web-search response was returned.")
         else:
             print(
-                "Google Search is an optional feature. Sign in to Google AI Studio "
-                "with a Google account, create a Gemini API key, then set "
-                "GEMINI_API_KEY in this terminal before starting Sentinel. "
-                "Sentinel uses Gemini API authorization; ChatGPT login is not supported."
+                "Conversational AI and Google Search need a Gemini API key. "
+                "Sign in to Google AI Studio with a Google account, create a "
+                "Gemini API key, then set GEMINI_API_KEY in this terminal before "
+                "starting Sentinel. Sentinel uses Gemini API authorization; "
+                "ChatGPT login is not supported."
             )
 
     def _show_help(self):
@@ -1317,9 +1263,9 @@ def main():
             state = "Sentinel console is ready"
         print(f"{GREEN}{state}{RESET}. Type {YELLOW}'help'{RESET} for commands.")
         print(
-            f"{DIM}Ask anything as a question; Sentinel will search Google "
-            "after you confirm. Type 'google QUESTION' to search directly, "
-            f"or 'help' for commands.{RESET}"
+            f"{DIM}Chat naturally with Gemini after confirming. Ask for latest "
+            "information or use 'google QUESTION' for Google Search; Sentinel "
+            f"will ask first. Type 'help' for commands.{RESET}"
         )
         if monitor and monitor_ready:
             monitor_thread = threading.Thread(

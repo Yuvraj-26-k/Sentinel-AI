@@ -989,9 +989,20 @@ class SentinelUiTests(unittest.TestCase):
                 self.assertIn("recorded network telemetry", stdout.getvalue())
                 self.assertIn("not general AI knowledge", stdout.getvalue())
 
-                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                    self.assertTrue(terminal.answer("does the ML know general facts?"))
-                self.assertIn("Google Search is an optional feature", stdout.getvalue())
+                with (
+                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch(
+                        "sentinel.chat_with_gemini",
+                        return_value="Sure, I can explain that.",
+                    ) as chat,
+                    patch("builtins.input", return_value="yes"),
+                    patch("sentinel.Sentinel._offer_save_report"),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertTrue(
+                        terminal.answer("Can you help me understand how the ML works?")
+                    )
+                chat.assert_called_once()
 
                 with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     self.assertTrue(terminal.answer("help"))
@@ -1070,7 +1081,7 @@ class SentinelUiTests(unittest.TestCase):
                 if terminal.store:
                     terminal.store.engine.dispose()
 
-    def test_ordinary_natural_question_uses_google_search(self):
+    def test_ordinary_natural_question_uses_conversational_gemini(self):
         query = "Explain DNSSEC"
         with tempfile.TemporaryDirectory() as directory:
             terminal = Sentinel(
@@ -1081,15 +1092,42 @@ class SentinelUiTests(unittest.TestCase):
                 with (
                     patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
                     patch(
-                        "sentinel.web_research",
-                        return_value={"answer": "A network filter.", "sources": []},
-                    ) as research,
-                    patch("builtins.input", side_effect=("yes", "no")),
+                        "sentinel.chat_with_gemini",
+                        return_value="DNSSEC protects DNS records.",
+                    ) as chat,
+                    patch("builtins.input", return_value="yes"),
+                    patch("sentinel.Sentinel._offer_save_report"),
                     patch("sys.stdout", new_callable=io.StringIO),
                 ):
                     self.assertTrue(terminal.answer(query))
-                research.assert_called_once_with(query)
-                self.assertIn("A network filter.", terminal.latest_report)
+                chat.assert_called_once()
+                self.assertEqual(chat.call_args.args[0], query)
+                self.assertIn("DNSSEC protects DNS records.", terminal.latest_report)
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_natural_language_with_command_keywords_still_uses_conversation(self):
+        query = "Can you help me understand how the anomaly model works?"
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch(
+                        "sentinel.chat_with_gemini",
+                        return_value="The model learns patterns from telemetry.",
+                    ) as chat,
+                    patch("builtins.input", return_value="yes"),
+                    patch("sentinel.Sentinel._offer_save_report"),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertTrue(terminal.answer(query))
+                chat.assert_called_once()
+                self.assertEqual(chat.call_args.args[0], query)
             finally:
                 if terminal.store:
                     terminal.store.engine.dispose()
@@ -1141,7 +1179,7 @@ class SentinelUiTests(unittest.TestCase):
                 if terminal.store:
                     terminal.store.engine.dispose()
 
-    def test_natural_question_search_uses_recent_history_after_consent(self):
+    def test_conversational_question_uses_recent_history_after_consent(self):
         with tempfile.TemporaryDirectory() as directory:
             terminal = Sentinel(
                 str(Path(directory, "alerts.jsonl")),
@@ -1157,20 +1195,23 @@ class SentinelUiTests(unittest.TestCase):
                 with (
                     patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
                     patch(
-                        "sentinel.web_research",
-                        return_value={"answer": "A grounded response.", "sources": []},
-                    ) as research,
-                    patch("builtins.input", side_effect=("yes", "no")),
+                        "sentinel.chat_with_gemini",
+                        return_value="A conversational response.",
+                    ) as chat,
+                    patch("builtins.input", return_value="yes"),
                     patch("sentinel.Sentinel._offer_save_report"),
                     patch("sys.stdout", new_callable=io.StringIO),
                 ):
                     self.assertTrue(
                         terminal.answer("What is a SYN scan?")
                     )
-                research.assert_called_once()
-                self.assertIn("Earlier question", research.call_args.args[0])
-                self.assertIn("What is a SYN scan?", research.call_args.args[0])
-                self.assertIn("A grounded response.", terminal.latest_report)
+                chat.assert_called_once()
+                self.assertEqual(chat.call_args.args[0], "What is a SYN scan?")
+                self.assertIn(
+                    {"role": "user", "text": "Earlier question"},
+                    chat.call_args.kwargs["history"],
+                )
+                self.assertIn("A conversational response.", terminal.latest_report)
                 self.assertEqual(len(terminal.chat_history), 4)
             finally:
                 if terminal.store:
