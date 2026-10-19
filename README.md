@@ -44,8 +44,10 @@ git clone https://github.com/Yuvraj-26-k/Sentinel-AI.git
 cd Sentinel-AI
 ```
 
-Create a virtual environment and install dependencies. Use the commands for
-your operating system.
+Create a virtual environment and install Sentinel once. Installation includes
+the dependencies and adds the `sentinel` command to the active environment's
+PATH. Afterward, activate that environment and type `sentinel` to start both
+the event monitor and interactive console.
 
 ### Linux
 
@@ -53,7 +55,7 @@ your operating system.
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
 For the default UFW source, enable firewall logging once:
@@ -76,7 +78,7 @@ sudo setfacl -m "u:$USER:r" /var/log/ufw.log
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -e .
 ```
 
 The default source streams macOS unified logs with the built-in `log` utility.
@@ -89,8 +91,9 @@ Install Python 3.10 or newer, then run:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
 The default source reads Windows Filtering Platform Security events. To
@@ -107,22 +110,21 @@ installed and accessible; Sysmon is optional.
 
 ## Run Sentinel
 
-Start the detector in one terminal:
+Activate the virtual environment from the installation steps, then start the
+monitor and live alert console together with one command:
 
 ```sh
-python sentinel.py monitor
+sentinel
 ```
 
-Open a second terminal in the repository directory, activate the same virtual
-environment, and start the interactive alert console:
+On Linux and macOS, activate with `source .venv/bin/activate`. In Windows
+PowerShell, activate with `.\.venv\Scripts\Activate.ps1`; if script activation
+is restricted, run `.\.venv\Scripts\sentinel.exe`. The automatic monitor uses
+the platform's default source: UFW on Linux, Windows Filtering Platform on
+Windows, and unified logs on macOS. One `Ctrl+C` or `quit` stops the console
+and its monitor. Use `sentinel --no-monitor` to open only the console.
 
-```sh
-python sentinel.py
-```
-
-The monitor uses the platform's default source: UFW on Linux, Windows Filtering
-Platform on Windows, and unified logs on macOS. The console follows the alert
-file and accepts these commands:
+The console accepts these commands:
 
 | Command | What it does |
 | --- | --- |
@@ -132,9 +134,9 @@ file and accepts these commands:
 | `help` | Show commands |
 | `quit` | Exit the console |
 
-Stop the monitor with `Ctrl+C`; the baseline and source status are saved.
-Animation is shown only in a terminal and can be disabled by redirecting
-output. Set `NO_COLOR=1` to disable colors.
+The baseline and source status are saved when Sentinel stops. Animation is
+shown only in a terminal and can be disabled by redirecting output. Set
+`NO_COLOR=1` to disable colors.
 
 ### Select a source
 
@@ -142,10 +144,10 @@ Pass a source to the monitor. File-based sources start at the current end of
 the file and follow new records:
 
 ```sh
-python sentinel.py monitor --source ufw
-python sentinel.py monitor --source windows-firewall --log-file "C:\Windows\System32\LogFiles\Firewall\pfirewall.log"
-python sentinel.py monitor --source suricata --log-file /var/log/suricata/eve.json
-python sentinel.py monitor --source zeek --log-file /usr/local/zeek/logs/current/conn.log
+sentinel --source ufw
+sentinel --source windows-firewall --log-file "C:\Windows\System32\LogFiles\Firewall\pfirewall.log"
+sentinel --source suricata --log-file /var/log/suricata/eve.json
+sentinel --source zeek --log-file /usr/local/zeek/logs/current/conn.log
 ```
 
 Supported sources are `auto`, `ufw`, `windows-firewall`, `windows-native`,
@@ -156,11 +158,12 @@ options. Suricata consumes EVE JSON and Zeek consumes `conn.log` TSV.
 Additional thresholds can be configured, for example:
 
 ```sh
-python sentinel.py monitor --source auto --scan-window-seconds 60 --vertical-ports 15 --horizontal-hosts 10 --slow-window-seconds 900
+sentinel --source auto --scan-window-seconds 60 --vertical-ports 15 --horizontal-hosts 10 --slow-window-seconds 900
 ```
 
-See `python sentinel.py monitor --help` for all thresholds and data-file
-options. Events without a destination port are retained where supported but
+Run `sentinel --help` to see console options or
+`python -m sentinel monitor --help` for all thresholds and data-file options.
+Events without a destination port are retained where supported but
 cannot contribute to port-scan detection.
 
 ### Optional local analysis and Gemini
@@ -168,8 +171,8 @@ cannot contribute to port-scan detection.
 Run a local example analysis or search the built-in triage guidance:
 
 ```sh
-python sentinel.py analyze --source 192.0.2.10 --events 20 --unique-ports 18 --duration 10
-python sentinel.py analyze --query "correlate firewall events"
+python -m sentinel analyze --source 192.0.2.10 --events 20 --unique-ports 18 --duration 10
+python -m sentinel analyze --query "correlate firewall events"
 ```
 
 To enable Gemini explanations, set `GEMINI_API_KEY` and optionally
@@ -197,10 +200,9 @@ history at `~/.nmap_ai_baseline.json`. Override paths with the monitor's
 
 ## Project layout
 
-The repository keeps the runtime in four cohesive Python modules, one
-consolidated regression test file, this guide, the dependency list, and
-`.gitignore`—eight project files total. The runtime modules group telemetry, detection, analysis, and the terminal
-interface.
+The repository has eight tracked project files: four cohesive runtime modules,
+one consolidated test file, this guide, the package/install configuration, and
+`.gitignore`.
 
 ## Tests
 

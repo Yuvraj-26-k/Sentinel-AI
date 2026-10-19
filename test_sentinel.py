@@ -2,6 +2,7 @@ import io
 import json
 import random
 import sqlite3
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -35,7 +36,7 @@ from analyst import (
     validate_analysis,
     verified_ai_analysis,
 )
-from sentinel import Sentinel
+from sentinel import Sentinel, main as sentinel_main
 
 # --- test_event_adapters.py ---
 class EventAdapterTests(unittest.TestCase):
@@ -631,6 +632,50 @@ class EvidenceAnalystTests(unittest.TestCase):
 
 # --- test_sentinel_ui.py ---
 class SentinelUiTests(unittest.TestCase):
+    def test_terminal_command_starts_and_stops_monitor_automatically(self):
+        from unittest.mock import Mock
+        import threading
+
+        process = Mock()
+        process.poll.return_value = None
+        terminal = Mock()
+        terminal.stop = threading.Event()
+        with (
+            patch("sentinel.subprocess.Popen", return_value=process) as launch,
+            patch("sentinel.Sentinel", return_value=terminal),
+            patch("sentinel.banner"),
+            patch("sentinel.scan_animation"),
+            patch("sentinel.loading"),
+            patch("builtins.input", side_effect=EOFError),
+            patch.object(sys, "argv", ["sentinel", "--source", "ufw"]),
+        ):
+            sentinel_main()
+
+        command = launch.call_args.args[0]
+        self.assertEqual(command[:4], [sys.executable, "-m", "sentinel", "monitor"])
+        self.assertIn("--source", command)
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=5)
+
+    def test_no_monitor_option_skips_background_monitor(self):
+        from unittest.mock import Mock
+        import threading
+
+        terminal = Mock()
+        terminal.stop = threading.Event()
+        with (
+            patch("sentinel.subprocess.Popen") as launch,
+            patch("sentinel.Sentinel", return_value=terminal),
+            patch("sentinel.banner"),
+            patch("sentinel.scan_animation"),
+            patch("sentinel.loading"),
+            patch("builtins.input", side_effect=EOFError),
+            patch.object(sys, "argv", ["sentinel", "--no-monitor"]),
+        ):
+            sentinel_main()
+
+        launch.assert_not_called()
+
     def test_alert_store_migrates_existing_database_and_deduplicates(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory, "sentinel.db")
