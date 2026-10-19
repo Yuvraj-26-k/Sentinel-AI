@@ -32,8 +32,9 @@ an attack.
   evidence, hashing, and alert tools, and explains Sentinel's behavioral
   detection scope without presenting it as general AI knowledge.
 - **Animated terminal experience:** colored startup banner, scanning progress
-  animation, live incident output, and interactive alert commands. Animation
-  and colors are disabled in non-interactive output; `NO_COLOR` disables color.
+  animation, live incident output, and animated, colored prompts that also color
+  typed commands. Prompt animation and colors are disabled in non-interactive
+  output; `NO_COLOR` disables color.
 - **CLI-only interface:** inspect live alerts and incidents directly in the
   terminal; no web server or dashboard is installed.
 

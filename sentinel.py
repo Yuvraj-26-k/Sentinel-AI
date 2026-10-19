@@ -416,6 +416,29 @@ def scan_animation(enabled=True):
     print(f"\r{GREEN}[{'─' * (width + 1)}]{RESET} {GREEN}telemetry ready{RESET}")
 
 
+def _prompt_input(prompt, input_fn=None, animate=True):
+    input_fn = input if input_fn is None else input_fn
+    interactive = sys.stdout.isatty()
+    use_color = interactive and "NO_COLOR" not in os.environ
+    if interactive and animate:
+        for frame in ("◐", "◓", "◑"):
+            animation = f"\033[96m{frame}\033[0m" if use_color else frame
+            print(f"\r{animation} Preparing prompt...", end="", flush=True)
+            time.sleep(0.035)
+        clear_line = "\r\033[2K" if use_color else "\r" + " " * 24 + "\r"
+        print(clear_line, end="", flush=True)
+    if use_color:
+        reset = "\033[0m"
+        prompt_color = "\033[95m"
+        value = input_fn(
+            f"{prompt_color}sentinel{reset} {prompt_color}›{reset} "
+            f"\033[96m{prompt}{reset}\033[92m"
+        )
+        print(reset, end="", flush=True)
+        return value
+    return input_fn(prompt)
+
+
 def _monitor_source(arguments):
     source = "auto"
     index = 0
@@ -434,7 +457,11 @@ def _monitor_source(arguments):
 def _prepare_linux_ufw(source, input_fn=None, run=None):
     if sys.platform != "linux" or source != "ufw":
         return True
-    input_fn = input if input_fn is None else input_fn
+    input_fn = (
+        (lambda prompt: _prompt_input(prompt, animate=False))
+        if input_fn is None
+        else input_fn
+    )
     run = subprocess.run if run is None else run
     if not sys.stdin.isatty():
         print(
@@ -752,7 +779,7 @@ class Sentinel:
             self._show_online_setup()
             return
         try:
-            consent = input(
+            consent = _prompt_input(
                 "Send this question to Gemini with Google Search? "
                 "The question is sent externally; no alert or log data is attached. [y/N] "
             ).strip().lower()
@@ -813,7 +840,7 @@ class Sentinel:
         filename = f"report-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.txt"
         destination = reports_directory / filename
         try:
-            answer = input(
+            answer = _prompt_input(
                 f"Save this report to {destination}? [y/N] "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -971,7 +998,7 @@ class Sentinel:
         ai_analysis = None
         if explain_with_gemini and os.getenv("GEMINI_API_KEY"):
             try:
-                consent = input(
+                consent = _prompt_input(
                     "Send this alert's telemetry fields to Gemini for evidence selection? [y/N] "
                 ).strip().lower()
             except (EOFError, KeyboardInterrupt):
@@ -1107,7 +1134,7 @@ def main():
         if sys.stdout.isatty():
             sentinel._show_features()
         print(f"{GREEN}{state}{RESET}. Type {YELLOW}'help'{RESET} for commands.")
-        while sentinel.answer(input("sentinel> ")):
+        while sentinel.answer(_prompt_input("command")):
             pass
     except (KeyboardInterrupt, EOFError):
         print("\nSentinel stopped.")

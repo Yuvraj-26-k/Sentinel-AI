@@ -41,6 +41,7 @@ from sentinel import (
     Sentinel,
     _monitor_source,
     _prepare_linux_ufw,
+    _prompt_input,
     analyze_log_file,
     collect_main as sentinel_module_collect_main,
     collect_evidence,
@@ -645,6 +646,45 @@ class EvidenceAnalystTests(unittest.TestCase):
 
 # --- test_sentinel_ui.py ---
 class SentinelUiTests(unittest.TestCase):
+    def test_interactive_prompt_animates_and_colors_prompt_and_typed_input(self):
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        stdout = TTYBuffer()
+        with (
+            patch("sentinel.sys.stdout", stdout),
+            patch("sentinel.time.sleep") as sleep,
+            patch("builtins.input", return_value="status") as read_input,
+            patch.dict("os.environ", {}, clear=True),
+        ):
+            answer = _prompt_input("command")
+        self.assertEqual(answer, "status")
+        self.assertEqual(sleep.call_count, 3)
+        self.assertIn("\033[96m", stdout.getvalue())
+        self.assertIn("\033[92m", read_input.call_args.args[0])
+        self.assertIn("sentinel", read_input.call_args.args[0])
+
+    def test_noninteractive_or_no_color_prompt_has_no_ansi_sequences(self):
+        with patch("sentinel.sys.stdout", io.StringIO()):
+            with patch("builtins.input", return_value="status") as read_input:
+                self.assertEqual(_prompt_input("command"), "status")
+        self.assertEqual(read_input.call_args.args, ("command",))
+
+        class TTYBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        stdout = TTYBuffer()
+        with (
+            patch("sentinel.sys.stdout", stdout),
+            patch("sentinel.time.sleep"),
+            patch("builtins.input", return_value="status") as read_input,
+            patch.dict("os.environ", {"NO_COLOR": "1"}),
+        ):
+            self.assertEqual(_prompt_input("command"), "status")
+        self.assertNotIn("\033[", stdout.getvalue())
+        self.assertNotIn("\033[", read_input.call_args.args[0])
     def test_hashing_streams_file_and_writes_exclusive_digest_report(self):
         import hashlib
 
