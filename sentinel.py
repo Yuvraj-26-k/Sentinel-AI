@@ -14,7 +14,6 @@ import stat
 import string
 import subprocess
 import sys
-import textwrap
 import threading
 import time
 from collections import deque
@@ -630,8 +629,8 @@ def _show_cli_help():
         "Stream a SHA-2 file digest\n"
         f"{BLUE}│{RESET} {CYAN}sentinel password generate|check{RESET}    "
         "Use local password utilities\n"
-        f"{BLUE}│{RESET} {CYAN}features / report{RESET}                  "
-        "Show integrated features or the latest report\n"
+        f"{BLUE}│{RESET} {CYAN}menu / report{RESET}                     "
+        "Show numbered actions or the latest report\n"
         f"{BLUE}│{RESET} {CYAN}--no-animation{RESET}                      "
         "Disable startup animation\n"
         f"{BLUE}╰{'─' * 61}{RESET}\n"
@@ -711,8 +710,27 @@ class Sentinel:
     def answer(self, command):
         command = command.strip()
         normalized = command.lower()
-        if normalized in {"quit", "exit", "q"}:
+        if normalized == "7" or normalized in {"quit", "exit", "q"}:
             return False
+        menu_commands = {
+            "1": "status",
+            "2": "alerts",
+            "3": "explain",
+            "5": "report",
+            "6": "help",
+        }
+        if normalized == "4":
+            try:
+                query = _prompt_input("Google question: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                query = ""
+            if query:
+                self._online_lookup(query)
+            else:
+                print("Google search cancelled; no question was sent.")
+            return True
+        command = menu_commands.get(normalized, command)
+        normalized = command.lower()
         try:
             lexer = shlex.shlex(command, posix=True)
             lexer.whitespace_split = True
@@ -770,14 +788,14 @@ class Sentinel:
                     self._online_lookup(query)
             else:
                 self._explain_latest()
-        elif normalized in {"analysis", "analyze alert", "alert analysis"}:
+        elif normalized in {"explain", "analysis", "analyze alert", "alert analysis"}:
             self._explain_latest()
         elif normalized in {
             "help", "?", "commands", "what can you do", "capabilities",
         } or "help" in normalized or intent == "help":
             self._show_help()
         elif normalized in {"features", "feature", "menu", "home"} or intent == "features":
-            self._show_features()
+            self._show_menu()
         elif normalized in {"report", "reports", "show report"}:
             self._show_report()
         elif normalized in {"status", "what happened", "what happened?", "recent", "alerts"} or intent == "status":
@@ -1067,68 +1085,22 @@ class Sentinel:
         if sys.stdout.isatty():
             print("\033[2J\033[H", end="")
 
-    def _show_features(self):
-        self._clear_screen()
-        feature_rows = (
-            "Cross-platform normalized telemetry",
-            "Vertical, horizontal, slow, SYN and failure scan rules",
-            "Behavioral anomaly scoring with Isolation Forest",
-            "Incident aggregation, SQLite history and duplicate handling",
-            "Evidence-backed explanations and investigation steps",
-            "NLP intent routing, local RAG retrieval and analyst agent",
-            "Optional consent-gated Gemini LLM with Google Search citations",
-            "Local log statistics and validated IP indicators",
-            "Evidence-file metadata collection",
-            "Streaming SHA-2 file hashing",
-            "Secure one-time password generation and checks",
-            "Google Search research (Google account + Gemini API key; no ChatGPT login)",
+    def _show_menu(self):
+        options = (
+            ("1", "Status"),
+            ("2", "Recent alerts"),
+            ("3", "Explain latest alert"),
+            ("4", "Search Google"),
+            ("5", "Latest report"),
+            ("6", "Help"),
+            ("7", "Quit"),
         )
-        width = max(80, min(shutil.get_terminal_size((100, 24)).columns, 120))
-        left_width = max(35, width // 2 - 5)
-        right_width = max(28, width - left_width - 9)
-        report_lines = self.latest_report.splitlines() if self.latest_report else [
-            "No report yet.",
-            "Run logs, collect, hash, explain,",
-            "or ask an online research question.",
-            "Saving always requires confirmation.",
-        ]
-        print(f"{CYAN}SENTINEL • FEATURES{RESET}")
-        feature_content = []
-        for feature in feature_rows:
-            feature_content.extend(
-                textwrap.wrap(f"> {feature}", width=left_width - 2) or [">"]
-            )
-        report_content = []
-        for line in report_lines:
-            report_content.extend(textwrap.wrap(line, width=right_width - 2) or [""])
-        feature_header = "┌" + "─" * (left_width - 2) + "┐"
-        report_header = "┌" + "─" * (right_width - 2) + "┐"
-        print(f"{BLUE}{feature_header}   {report_header}{RESET}")
-        feature_title = " FEATURES "
-        report_title = " LATEST REPORT "
+        print(f"\n{BLUE}╭─ SENTINEL OPTIONS {'─' * 42}{RESET}")
+        for number, label in options:
+            print(f"{BLUE}│{RESET} {CYAN}{number}{RESET}  {label}")
         print(
-            f"{BLUE}│{CYAN}{feature_title:<{left_width - 2}}{BLUE}│   "
-            f"│{MAGENTA}{report_title:<{right_width - 2}}{BLUE}│{RESET}"
-        )
-        print(
-            f"{BLUE}{'├' + '─' * (left_width - 2) + '┤'}   "
-            f"{'├' + '─' * (right_width - 2) + '┤'}{RESET}"
-        )
-        rows = max(len(feature_content), len(report_content), 1)
-        for index in range(rows):
-            feature = feature_content[index] if index < len(feature_content) else ""
-            report = report_content[index] if index < len(report_content) else ""
-            print(
-                f"{BLUE}│{CYAN} {feature:<{left_width - 3}}{BLUE}│   "
-                f"│{MAGENTA} {report:<{right_width - 3}}{BLUE}│{RESET}"
-            )
-        print(
-            f"{BLUE}{'└' + '─' * (left_width - 2) + '┘'}   "
-            f"{'└' + '─' * (right_width - 2) + '┘'}{RESET}"
-        )
-        print(
-            f"\n{DIM}Commands: status (alerts) · features · report · help · quit"
-            f"{RESET}"
+            f"{BLUE}╰{'─' * 61}{RESET}\n"
+            f"{DIM}Choose a number or type a question / command.{RESET}"
         )
 
     @staticmethod
@@ -1146,7 +1118,7 @@ class Sentinel:
     def _show_help(self):
         rows = (
             ("status", "Show recorded incident and alert status"),
-            ("features", "Clear the screen and show integrated features + report panel"),
+            ("menu", "Show numbered actions"),
             ("report", "Show the latest non-secret report"),
             ("ask a question", "Search Google with citations after external-sharing consent"),
             ("google QUESTION", "Search Google and show cited sources after consent"),
@@ -1298,8 +1270,7 @@ def main():
         loading("Connecting local alert database", enabled=not args.no_animation)
         if monitor_ready:
             loading("Starting platform event monitor", enabled=not args.no_animation)
-        if sys.stdout.isatty():
-            sentinel._show_features()
+        sentinel._show_menu()
 
         if monitor_ready:
             try:

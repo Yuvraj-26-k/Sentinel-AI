@@ -1197,28 +1197,67 @@ class SentinelUiTests(unittest.TestCase):
                 if terminal.store:
                     terminal.store.engine.dispose()
 
-    def test_feature_dashboard_clears_screen_and_shows_report_panel(self):
-        class TTYBuffer(io.StringIO):
-            def isatty(self):
-                return True
-
+    def test_menu_shows_numbered_actions_without_feature_or_report_panels(self):
         with tempfile.TemporaryDirectory() as directory:
             terminal = Sentinel(
                 str(Path(directory, "alerts.jsonl")),
                 str(Path(directory, "alerts.db")),
             )
             terminal.latest_report = "Example saved-safe report"
-            output = TTYBuffer()
+            output = io.StringIO()
             try:
                 with patch("sys.stdout", output):
-                    self.assertTrue(terminal.answer("features"))
+                    self.assertTrue(terminal.answer("menu"))
                 rendered = output.getvalue()
-                self.assertIn("\033[2J\033[H", rendered)
-                self.assertIn("FEATURES", rendered)
-                self.assertIn("LATEST REPORT", rendered)
-                self.assertIn("Example saved-safe report", rendered)
-                self.assertIn("> Secure one-time password", rendered)
-                self.assertNotIn("scans performed", rendered.lower())
+                self.assertIn("SENTINEL OPTIONS", rendered)
+                self.assertIn("1  Status", rendered)
+                self.assertIn("2  Recent alerts", rendered)
+                self.assertIn("3  Explain latest alert", rendered)
+                self.assertIn("4  Search Google", rendered)
+                self.assertIn("7  Quit", rendered)
+                self.assertNotIn("FEATURES", rendered)
+                self.assertNotIn("LATEST REPORT", rendered)
+                self.assertNotIn("Example saved-safe report", rendered)
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_numbered_menu_routes_report_help_explain_and_quit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch.object(terminal, "_show_report") as report,
+                    patch.object(terminal, "_show_help") as help_menu,
+                    patch.object(terminal, "_explain_latest") as explain,
+                ):
+                    self.assertTrue(terminal.answer("5"))
+                    self.assertTrue(terminal.answer("6"))
+                    self.assertTrue(terminal.answer("3"))
+                    self.assertFalse(terminal.answer("7"))
+                report.assert_called_once_with()
+                help_menu.assert_called_once_with()
+                explain.assert_called_once_with()
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_numbered_google_option_prompts_for_question(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch("builtins.input", return_value="Explain DNSSEC"),
+                    patch.object(terminal, "_online_lookup") as online_lookup,
+                ):
+                    self.assertTrue(terminal.answer("4"))
+                online_lookup.assert_called_once_with("Explain DNSSEC")
             finally:
                 if terminal.store:
                     terminal.store.engine.dispose()

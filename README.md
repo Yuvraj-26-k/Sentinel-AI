@@ -150,7 +150,19 @@ and its monitor. Use `sentinel --no-monitor` to open only the console.
 Use `sentinel --no-animation` to skip the startup progress effects while
 keeping the banner and interactive console.
 
-The console accepts these commands:
+The startup menu also accepts numbered choices:
+
+| Number | Action |
+| --- | --- |
+| `1` | Status |
+| `2` | Recent alerts |
+| `3` | Explain the latest alert |
+| `4` | Search Google |
+| `5` | Show the latest report |
+| `6` | Help |
+| `7` | Quit |
+
+You can also type commands or ask questions directly:
 
 | Command | What it does |
 | --- | --- |
@@ -161,9 +173,9 @@ The console accepts these commands:
 | `collect DIRECTORY` | List evidence-file metadata; optionally save a report |
 | `hash FILE` | Print a SHA-2 digest without printing file contents |
 | `password generate` / `password check` | Generate or check a secret interactively |
-| `features` | Clear the screen and show features with a latest-report panel |
+| `menu` | Show the numbered actions |
 | `report` | Show the latest non-secret report |
-| Natural-language question | Search local RAG; ask before optional web research |
+| Natural-language question | Search Google after consent; requires `GEMINI_API_KEY` |
 | `help` | Show commands |
 | `quit` | Exit the console |
 
@@ -175,8 +187,9 @@ show the newest alert using its recorded evidence.
 
 Interactive file analysis, hashing, explanations, and online answers ask before
 saving a report under `~/.sentinel/reports/`; decline to keep it on screen only.
-Generated passwords are never included in saved reports. `features` shows a
-two-panel overview; its feature list does not show scan history.
+Generated passwords are never included in saved reports. The numbered menu
+replaces the feature dashboard; it does not clear the screen or show a report
+panel.
 
 ### NLP, RAG, analyst agent, and online LLM
 
