@@ -1,30 +1,31 @@
-#!/usr/bin/env python3
-"""Interactive terminal assistant for SentinelAI alerts."""
-
 import argparse
+import asyncio
 import json
 import os
 import sys
 import threading
 import time
 from collections import deque
+from functools import lru_cache
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
-try:
-    from alert_store import AlertStore
-except ImportError:
-    AlertStore = None
+from analyst import (
+    AlertStore,
+    analyst_main,
+    chat as chat_with_gemini,
+    explain_alert as explain_with_gemini,
+    format_analysis,
+    local_analysis,
+    verified_ai_analysis,
+)
+from detection import detector_main
+from telemetry import TelemetryStore
 
-try:
-    from cloud_llm import chat as chat_with_gemini
-except ImportError:
-    chat_with_gemini = None
+# --- sentinel.py ---
+#!/usr/bin/env python3
+"""Interactive terminal assistant for SentinelAI alerts."""
 
-try:
-    from cloud_llm import explain_alert as explain_with_gemini
-except ImportError:
-    explain_with_gemini = None
-
-from security_analyst import format_analysis, local_analysis, verified_ai_analysis
 
 COLOR_ENABLED = sys.stdout.isatty() and "NO_COLOR" not in os.environ
 RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -66,6 +67,18 @@ def loading(message="Initializing security modules"):
         print(f"\r{CYAN}{frame}{RESET} {message}...", end="", flush=True)
         time.sleep(0.04)
     print(f"\r{GREEN}✔{RESET} {message} ready.{' ' * 10}")
+
+
+def scan_animation():
+    if not sys.stdout.isatty():
+        return
+    width = 24
+    for frame in range(width * 2):
+        position = frame if frame < width else width * 2 - frame
+        bar = "─" * position + "●" + "─" * (width - position)
+        print(f"\r{CYAN}[{bar}]{RESET} {DIM}warming up telemetry{RESET}", end="", flush=True)
+        time.sleep(0.025)
+    print(f"\r{GREEN}[{'─' * (width + 1)}]{RESET} {GREEN}telemetry ready{RESET}")
 
 
 class Sentinel:
@@ -191,7 +204,13 @@ class Sentinel:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sentinel interactive security chatbot")
+    if len(sys.argv) > 1 and sys.argv[1] == "monitor":
+        detector_main(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "analyze":
+        analyst_main(sys.argv[2:])
+        return
+    parser = argparse.ArgumentParser(description="Sentinel terminal security monitor")
     parser.add_argument("--alert-file", default=os.path.expanduser("~/.sentinel_alerts.jsonl"))
     parser.add_argument("--database-file", default=os.path.expanduser("~/.sentinel.db"))
     args = parser.parse_args()
@@ -200,6 +219,7 @@ def main():
     watcher = threading.Thread(target=sentinel.watch, daemon=True)
     watcher.start()
     banner()
+    scan_animation()
     loading("Loading ML and alert engine")
     loading("Connecting local alert database")
     loading("Starting live event watcher")
@@ -216,6 +236,98 @@ def main():
         print("\nSentinel stopped.")
     finally:
         sentinel.stop.set()
+
+# --- api.py ---
+@lru_cache(maxsize=1)
+def _default_store():
+    path = os.environ.get(
+        "SENTINEL_DATABASE_FILE",
+        os.path.expanduser("~/.sentinel.db"),
+    )
+    return TelemetryStore(path)
+
+
+def create_app(store=None):
+    app = FastAPI(
+        title="Sentinel Telemetry API",
+        description="Read-only event, incident, and ingestion-health endpoints.",
+        version="1.0.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    telemetry = store or _default_store
+
+    def get_store():
+        return telemetry() if callable(telemetry) else telemetry
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return {
+            "service": "Sentinel Telemetry API",
+            "interface": "terminal",
+            "health": "/api/health",
+        }
+
+    @app.get("/api/health")
+    def health():
+        return get_store().health()
+
+    @app.get("/api/events")
+    def events(
+        limit: int = Query(default=100, ge=1, le=5000),
+        since: str | None = None,
+    ):
+        return get_store().recent_events(limit=limit, since=since)
+
+    @app.get("/api/incidents")
+    def incidents(
+        limit: int = Query(default=100, ge=1, le=1000),
+        status: str | None = Query(default=None, pattern="^(open|closed)$"),
+    ):
+        return get_store().list_incidents(limit=limit, status=status)
+
+    @app.get("/api/incidents/{incident_id}")
+    def incident(incident_id: str):
+        result = get_store().get_incident(incident_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        return result
+
+    @app.get("/api/stream")
+    async def stream(
+        request: Request,
+        after_id: int = Query(default=0, ge=0),
+    ):
+        async def generate():
+            cursor = after_id
+            while not await request.is_disconnected():
+                rows = get_store().events_after(cursor, limit=500)
+                if rows:
+                    for row in rows:
+                        cursor = row["id"]
+                        yield (
+                            f"id: {cursor}\n"
+                            f"event: telemetry\n"
+                            f"data: {json.dumps(row['event'], separators=(',', ':'), default=str)}\n\n"
+                        )
+                else:
+                    yield ": keep-alive\n\n"
+                    await asyncio.sleep(1)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    return app
+
+
+app = create_app()
 
 
 if __name__ == "__main__":
