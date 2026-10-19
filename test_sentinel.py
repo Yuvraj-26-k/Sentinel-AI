@@ -1061,7 +1061,71 @@ class SentinelUiTests(unittest.TestCase):
                 ):
                     self.assertTrue(terminal.answer("Search for a security topic"))
                 research.assert_not_called()
-                self.assertIn("question was not sent", stdout.getvalue())
+                self.assertIn("cancelled; nothing was sent", stdout.getvalue())
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_conversational_llm_receives_bounded_history_and_retrieval_after_consent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            terminal.chat_history.extend(
+                [
+                    {"role": "user", "text": "Earlier question"},
+                    {"role": "assistant", "text": "Earlier answer"},
+                ]
+            )
+            try:
+                with (
+                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch(
+                        "sentinel.chat_with_gemini",
+                        return_value="A natural conversational reply.",
+                    ) as chat,
+                    patch("builtins.input", return_value="yes"),
+                    patch("sentinel.Sentinel._offer_save_report"),
+                    patch("sys.stdout", new_callable=io.StringIO),
+                ):
+                    self.assertTrue(
+                        terminal.answer("And how does an Nmap SYN scan work?")
+                    )
+                chat.assert_called_once()
+                args = chat.call_args
+                self.assertIn("Nmap", args.args[0])
+                self.assertEqual(
+                    args.kwargs["history"],
+                    [
+                        {"role": "user", "text": "Earlier question"},
+                        {"role": "assistant", "text": "Earlier answer"},
+                    ],
+                )
+                self.assertIn("SYN scan", args.kwargs["context"])
+                self.assertIn("A natural conversational reply.", terminal.latest_report)
+                self.assertEqual(len(terminal.chat_history), 4)
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_conversational_llm_is_not_called_without_turn_consent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
+                    patch("sentinel.chat_with_gemini") as chat,
+                    patch("builtins.input", return_value="no"),
+                    patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                ):
+                    self.assertTrue(terminal.answer("How does the TCP handshake work?"))
+                chat.assert_not_called()
+                self.assertFalse(terminal.chat_history)
+                self.assertIn("cancelled; nothing was sent", stdout.getvalue())
             finally:
                 if terminal.store:
                     terminal.store.engine.dispose()
@@ -1423,6 +1487,25 @@ class SentinelUiTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "GEMINI_API_KEY"):
                 analyst.web_research("test")
         post.assert_not_called()
+
+    def test_gemini_chat_prompt_includes_only_bounded_history_and_guidance(self):
+        with patch("analyst._generate", return_value="Hello!") as generate:
+            answer = analyst.chat(
+                "Follow-up",
+                context="[guide]\nSafe guidance",
+                history=[
+                    {"role": "user", "text": "First question"},
+                    {"role": "assistant", "text": "First reply"},
+                    {"role": "system", "text": "must be ignored"},
+                ],
+            )
+        prompt = generate.call_args.args[0]
+        self.assertEqual(answer, "Hello!")
+        self.assertIn("First question", prompt)
+        self.assertIn("First reply", prompt)
+        self.assertIn("Safe guidance", prompt)
+        self.assertIn("Follow-up", prompt)
+        self.assertNotIn("must be ignored", prompt)
 
 # --- test_smart_detector.py ---
 class SmartDetectorTests(unittest.TestCase):

@@ -24,6 +24,7 @@ from analyst import (
     AlertStore,
     LocalSecurityAgent,
     analyst_main,
+    chat as chat_with_gemini,
     classify_intent,
     explain_alert as explain_with_gemini,
     format_analysis,
@@ -626,6 +627,7 @@ class Sentinel:
         self.position = 0
         self.latest_report = ""
         self.agent = LocalSecurityAgent()
+        self.chat_history = deque(maxlen=8)
 
     def load_existing(self):
         try:
@@ -763,7 +765,10 @@ class Sentinel:
                         f"{event.get('source')} | {event.get('event')} | "
                         f"{incident_id}"
                     )
-        elif any(word in normalized for word in ("explain", "incident", "alert")) or intent == "explain":
+        elif intent == "explain" or (
+            any(word in lowered_tokens for word in ("incident", "alert"))
+            and any(word in lowered_tokens for word in ("explain", "why", "analyze", "analysis"))
+        ):
             self._explain_latest()
         elif intent == "scan_guidance" or any(
             phrase in normalized
@@ -774,8 +779,11 @@ class Sentinel:
                 "monitor status",
             )
         ):
-            self._show_scan_guidance()
-            self._show_rag_answer(command)
+            if self._is_natural_question(command):
+                self._conversational_answer(command)
+            else:
+                self._show_scan_guidance()
+                self._show_rag_answer(command)
         elif intent == "logs" or any(word in normalized for word in ("log", "logs")):
             print("Sentinel: For file-level log statistics and indicators, run "
                   "'logs PATH' or 'analyze logs PATH'. This does not analyze "
@@ -796,9 +804,108 @@ class Sentinel:
         elif intent == "ml_scope" or any(word in normalized for word in ("model", "machine learning", "anomaly", "ml ")):
             self._show_analysis_scope()
         else:
-            if not self._show_rag_answer(command):
-                self._online_lookup(command)
+            self._conversational_answer(command)
         return True
+
+    @staticmethod
+    def _is_natural_question(query):
+        normalized = query.strip().lower()
+        return (
+            "?" in normalized
+            or normalized.startswith(
+                ("what ", "how ", "why ", "when ", "where ", "who ", "can you ",
+                 "could you ", "would you ", "tell me ", "explain ", "describe ")
+            )
+        )
+
+    @staticmethod
+    def _requests_current_web(query):
+        normalized = query.lower()
+        return any(
+            phrase in normalized
+            for phrase in (
+                "search the web", "search online", "look online", "look up online",
+                "on the internet", "latest ", "current ", "today's ", "today ",
+                "right now", "up to date", "recent news",
+            )
+        )
+
+    def _conversational_answer(self, query):
+        retrieved = self.agent.answer(query)["documents"]
+        local_context = "\n\n".join(
+            f"[{item['document']}]\n{item['excerpt']}"
+            for item in retrieved
+        )
+        if not os.getenv("GEMINI_API_KEY"):
+            if (
+                classify_intent(query) == "scan_guidance"
+                or "scan detection" in query.lower()
+            ):
+                self._show_scan_guidance()
+                self._show_analysis_scope()
+            if retrieved:
+                self._show_rag_answer(query)
+            else:
+                self._show_online_setup()
+            return
+        consent_text = (
+            "Send this question, up to 8 recent chat turns, and relevant local "
+            "guidance to Gemini? The question is sent externally; no alerts or "
+            "log contents are attached. [y/N] "
+        )
+        try:
+            consent = _prompt_input(consent_text).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            consent = ""
+        if consent not in {"y", "yes"}:
+            print("Chat request cancelled; nothing was sent.")
+            return
+
+        if self._requests_current_web(query):
+            history_context = "\n".join(
+                f"{turn['role']}: {turn['text']}"
+                for turn in list(self.chat_history)[-4:]
+            )
+            research_query = (
+                f"Recent conversation:\n{history_context}\n\nQuestion:\n{query}"
+                if history_context
+                else query
+            )
+            try:
+                result = web_research(research_query)
+            except Exception as error:
+                print(f"{RED}Online research failed:{RESET} {error}")
+                return
+            answer = result["answer"]
+            if result["sources"]:
+                answer += "\n\nSources:\n" + "\n".join(
+                    f"- {source['title']}: {source['url']}"
+                    for source in result["sources"]
+                )
+            answer += (
+                "\n\nWeb-grounded results may be incomplete or incorrect; "
+                "verify important claims."
+            )
+        else:
+            try:
+                answer = chat_with_gemini(
+                    query,
+                    context=local_context,
+                    history=list(self.chat_history),
+                )
+            except Exception as error:
+                print(f"{RED}Sentinel AI request failed:{RESET} {error}")
+                return
+            if not answer:
+                self._show_online_setup()
+                return
+
+        self.chat_history.append({"role": "user", "text": query})
+        self.chat_history.append({"role": "assistant", "text": answer})
+        self.latest_report = f"Sentinel AI:\n{answer}"
+        self._clear_screen()
+        print(f"{CYAN}Sentinel AI{RESET}: {answer}")
+        self._offer_save_report()
 
     def _show_rag_answer(self, query):
         rag_result = self.agent.answer(query)
@@ -994,6 +1101,7 @@ class Sentinel:
             ("status", "Show recorded incident and alert status"),
             ("features", "Clear the screen and show integrated features + report panel"),
             ("report", "Show the latest non-secret report"),
+            ("ask a question", "Chat naturally; follow-ups use temporary conversation history"),
             ("alerts / recent", "Show evidence and recommended investigation steps"),
             ("explain", "Highlight the latest alert and explain recorded evidence"),
             ("logs PATH", "Summarize one local text log"),

@@ -328,12 +328,32 @@ def explain_alert(alert):
     return json.loads(response) if response else None
 
 
-def chat(message, context=""):
+def chat(message, context="", history=None):
+    """Generate a conversational reply from a bounded, caller-approved context."""
+    if not isinstance(message, str) or not message.strip() or len(message) > 4000:
+        raise ValueError("chat messages must contain 1 to 4000 characters")
+    safe_history = []
+    for turn in (history or [])[-8:]:
+        if (
+            isinstance(turn, dict)
+            and turn.get("role") in {"user", "assistant"}
+            and isinstance(turn.get("text"), str)
+        ):
+            safe_history.append(
+                f"{turn['role'].capitalize()}: {turn['text'][:2000]}"
+            )
+    conversation = "\n".join(safe_history) or "(start of conversation)"
     return _generate(
-        "You are Sentinel, a concise defensive cybersecurity assistant. "
-        "Answer the user's question using only the supplied local context. "
-        "Never execute commands, expose secrets, or recommend automatic blocking. "
-        f"\nLocal context: {context}\nUser: {message}"
+        "You are Sentinel, a helpful conversational assistant with a focus on "
+        "defensive cybersecurity. Reply naturally, answer follow-up questions "
+        "using the supplied conversation context, and clearly state uncertainty. "
+        "Never claim guaranteed correctness, invent citations, execute commands, "
+        "expose secrets, or recommend automatic blocking. Retrieved notes are "
+        "general guidance, not telemetry evidence. Do not claim to have inspected "
+        "alerts or logs unless their contents are explicitly supplied.\n"
+        f"\nConversation (oldest first):\n{conversation}"
+        f"\n\nRetrieved local guidance:\n{context or '(none)'}"
+        f"\n\nUser: {message}\nAssistant:"
     )
 
 

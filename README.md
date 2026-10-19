@@ -179,21 +179,26 @@ two-panel overview; its feature list does not show scan history.
 ### NLP, RAG, analyst agent, and online LLM
 
 Natural-language commands are routed locally using token normalization,
-common inflections, and intent phrases. General questions first search a small
-local security knowledge base (built-in triage notes plus optional Markdown
-files in `knowledge/`). The bounded analyst agent combines retrieved guidance
-with the recorded alert's deterministic evidence analysis; retrieved text is
-marked as guidance, never incident evidence.
+common inflections, and intent phrases. With `GEMINI_API_KEY`, you can ask
+questions in normal language and continue with follow-ups; a bounded recent
+conversation is held in memory for the current console. Relevant queries first
+retrieve from a small local security knowledge base (built-in triage notes plus
+optional Markdown files in `knowledge/`) and supply those excerpts as context.
+The bounded analyst agent combines retrieved guidance with the recorded alert's
+deterministic evidence analysis; retrieved text is marked as guidance, never
+incident evidence. Without an API key, matching local guidance is displayed
+instead of a generated conversational answer.
 
-Set `GEMINI_API_KEY` and, optionally, `GEMINI_WEB_MODEL` to enable online
-Google Search-grounded LLM research. For each web question, Sentinel asks
-before sending the question to Gemini/Search and does not attach local logs or
-alerts. `explain` separately asks before sending alert telemetry to Gemini for
-evidence selection. Answers show available citations and an uncertainty
-warning; coverage, sources, and model output can be wrong or incomplete, so
-verify important information with primary sources. There is no 100% accuracy
-guarantee. Without a key, local detection, intent routing, and RAG continue to
-work offline.
+Set `GEMINI_API_KEY` and, optionally, `GEMINI_WEB_MODEL` to enable conversational
+LLM answers. Each turn asks before sending the question, up to eight recent chat
+turns, and relevant retrieved knowledge. Chat history stays in memory for the
+current console only. Sentinel does not attach local logs or alerts to normal
+chat. Time-sensitive requests (such as those asking for current or latest
+information) use Gemini Google Search grounding and show available citations.
+`explain` separately asks before sending alert telemetry to Gemini for evidence
+selection. Answers can be wrong or incomplete; verify important information
+with primary sources. There is no 100% accuracy guarantee. Without a key, local
+detection, intent routing, and RAG continue to work offline.
 
 ### Analyze logs and collect evidence files
 
