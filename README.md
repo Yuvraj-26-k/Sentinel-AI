@@ -64,15 +64,16 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-For the default UFW source, enable firewall logging once:
+On first launch with the default UFW source, Sentinel checks whether UFW and
+its log are available. If UFW is missing, it offers to install it using the
+detected system package manager; if logging appears disabled, it separately
+asks whether to run `sudo ufw logging on`. Both actions require your explicit
+confirmation. Sentinel never enables the firewall or changes firewall rules.
+If you decline setup, it opens the console without live monitoring and tells
+you how to select another installed source.
 
-```sh
-sudo ufw logging on
-```
-
-Make sure your account can read `/var/log/ufw.log`. For example, on systems
-with ACL support, grant your account read access rather than running the whole
-application as root:
+Make sure your account can read `/var/log/ufw.log`; Sentinel does not run the
+monitor as root. On systems with ACL support, you can grant read access with:
 
 ```sh
 sudo setfacl -m "u:$USER:r" /var/log/ufw.log

@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import stat
 import string
 import subprocess
@@ -411,6 +412,175 @@ def scan_animation(enabled=True):
     print(f"\r{GREEN}[{'─' * (width + 1)}]{RESET} {GREEN}telemetry ready{RESET}")
 
 
+def _monitor_source(arguments):
+    source = "auto"
+    index = 0
+    while index < len(arguments):
+        if arguments[index] == "--source" and index + 1 < len(arguments):
+            source = arguments[index + 1]
+            index += 1
+        elif arguments[index].startswith("--source="):
+            source = arguments[index].split("=", 1)[1]
+        index += 1
+    if source == "auto" and sys.platform == "linux":
+        return "ufw"
+    return source
+
+
+def _prepare_linux_ufw(source, input_fn=None, run=None):
+    if sys.platform != "linux" or source != "ufw":
+        return True
+    input_fn = input if input_fn is None else input_fn
+    run = subprocess.run if run is None else run
+    if not sys.stdin.isatty():
+        print(
+            f"{YELLOW}Live monitor not started:{RESET} UFW requires an interactive "
+            "install/setup confirmation. Install UFW, then run Sentinel again, "
+            "or select an available source with --source.",
+            file=sys.stderr,
+        )
+        return False
+
+    ufw = shutil.which("ufw")
+    if not ufw:
+        package_managers = (
+            ("apt-get", ["apt-get", "install", "-y", "ufw"]),
+            ("dnf", ["dnf", "install", "-y", "ufw"]),
+            ("yum", ["yum", "install", "-y", "ufw"]),
+            ("pacman", ["pacman", "-S", "--noconfirm", "ufw"]),
+            ("zypper", ["zypper", "--non-interactive", "install", "ufw"]),
+        )
+        package_manager = next(
+            (
+                (name, command)
+                for name, command in package_managers
+                if shutil.which(name)
+            ),
+            None,
+        )
+        if not package_manager:
+            print(
+                f"{YELLOW}Live monitor not started:{RESET} UFW is missing and no "
+                "supported package manager was found. Install UFW yourself or "
+                "select an available source with --source.",
+                file=sys.stderr,
+            )
+            return False
+        manager_name, install_command = package_manager
+        answer = input_fn(
+            f"UFW is not installed. Install it using {manager_name} with sudo? [y/N] "
+        ).strip().lower()
+        if answer not in {"y", "yes"}:
+            print(
+                f"{YELLOW}Live monitor not started:{RESET} UFW was not installed. "
+                "Choose another available source with --source.",
+                file=sys.stderr,
+            )
+            return False
+        try:
+            result = run(["sudo", *install_command], check=False)
+        except OSError as error:
+            print(f"{RED}UFW installation failed:{RESET} {error}", file=sys.stderr)
+            return False
+        if result.returncode:
+            print(
+                f"{RED}UFW installation failed:{RESET} package manager exited "
+                f"with status {result.returncode}.",
+                file=sys.stderr,
+            )
+            return False
+        ufw = shutil.which("ufw")
+        if not ufw:
+            print(
+                f"{RED}UFW installation did not provide an `ufw` command.{RESET}",
+                file=sys.stderr,
+            )
+            return False
+
+    try:
+        status = run(
+            [ufw, "status", "verbose"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        print(f"{RED}Could not inspect UFW logging:{RESET} {error}", file=sys.stderr)
+        return False
+    status_text = f"{status.stdout or ''}\n{status.stderr or ''}"
+    logging_enabled = re.search(r"(?im)^\s*logging:\s*on\b", status_text)
+    log_path = Path("/var/log/ufw.log")
+    if not logging_enabled or not log_path.exists():
+        answer = input_fn(
+            "UFW logging may be off or its log is missing. Enable UFW logging "
+            "with sudo? This does not enable the firewall. [y/N] "
+        ).strip().lower()
+        if answer not in {"y", "yes"}:
+            print(
+                f"{YELLOW}Live monitor not started:{RESET} UFW logging was not "
+                "enabled. Choose another available source with --source.",
+                file=sys.stderr,
+            )
+            return False
+        try:
+            result = run(["sudo", ufw, "logging", "on"], check=False)
+        except OSError as error:
+            print(f"{RED}Could not enable UFW logging:{RESET} {error}", file=sys.stderr)
+            return False
+        if result.returncode:
+            print(
+                f"{RED}Could not enable UFW logging:{RESET} command exited with "
+                f"status {result.returncode}.",
+                file=sys.stderr,
+            )
+            return False
+    return True
+
+
+def _relay_monitor_output(process, stop_event):
+    if process.stdout is not None:
+        for line in process.stdout:
+            message = line.rstrip()
+            if not message:
+                continue
+            color = RED if "failed" in message.lower() or "error" in message.lower() else DIM
+            print(f"{color}{message}{RESET}", flush=True)
+    return_code = process.poll()
+    if not stop_event.is_set() and return_code:
+        print(
+            f"{RED}Live monitor exited with status {return_code}.{RESET} "
+            "Use 'help' to see source options.",
+            flush=True,
+        )
+
+
+def _show_cli_help():
+    print(
+        f"\n{BLUE}╭─ SENTINEL SECURITY MONITOR {'─' * 34}{RESET}\n"
+        f"{BLUE}│{RESET} {CYAN}sentinel{RESET}                         "
+        "Start monitor and interactive console\n"
+        f"{BLUE}│{RESET} {CYAN}sentinel --no-monitor{RESET}             "
+        "Open console without live ingestion\n"
+        f"{BLUE}│{RESET} {CYAN}sentinel --source SOURCE{RESET}           "
+        "Choose ufw, windows-firewall, macos-unified, suricata, or zeek\n"
+        f"{BLUE}│{RESET} {CYAN}sentinel monitor --help{RESET}            "
+        "Show detector thresholds and log options\n"
+        f"{BLUE}│{RESET} {CYAN}sentinel logs PATH{RESET}                  "
+        "Analyze a local text log\n"
+        f"{BLUE}│{RESET} {CYAN}sentinel collect DIRECTORY{RESET}          "
+        "Inventory local evidence files\n"
+        f"{BLUE}│{RESET} {CYAN}sentinel hash FILE{RESET}                  "
+        "Stream a SHA-2 file digest\n"
+        f"{BLUE}│{RESET} {CYAN}sentinel password generate|check{RESET}    "
+        "Use local password utilities\n"
+        f"{BLUE}│{RESET} {CYAN}--no-animation{RESET}                      "
+        "Disable startup animation\n"
+        f"{BLUE}╰{'─' * 61}{RESET}\n"
+        f"{DIM}Linux UFW installation and logging setup are opt-in. "
+        "Sentinel does not enable the firewall.{RESET}"
+    )
+
+
 class Sentinel:
     def __init__(self, alert_file, database_file="~/.sentinel.db"):
         self.alert_file = alert_file
@@ -456,13 +626,14 @@ class Sentinel:
     def render(event):
         severity = str(event.get("severity", "medium")).upper()
         severity_color = RED if severity == "HIGH" else YELLOW if severity == "MEDIUM" else CYAN
+        classification = str(event.get("event", "network activity"))
         destination = event.get("destination", "unknown")
         destination_port = event.get("destination_port")
         endpoint = f"{destination}:{destination_port}" if destination_port else destination
         return (
             f"{MAGENTA}╭─ SENTINEL INCIDENT{RESET} "
-            f"{severity_color}[{severity}]{RESET}\n"
-            f"{MAGENTA}│{RESET} {event.get('event', 'network activity')}\n"
+            f"{severity_color}◆ {severity} SEVERITY ◆{RESET}\n"
+            f"{MAGENTA}│{RESET} {severity_color}{classification}{RESET}\n"
             f"{MAGENTA}│{RESET} {event.get('source', 'unknown')} → {endpoint}\n"
             f"{MAGENTA}│{RESET} {event.get('events', 0)} observations · "
             f"{event.get('unique_ports', 0)} ports · "
@@ -561,13 +732,26 @@ class Sentinel:
             pass
 
     def _show_help(self):
+        rows = (
+            ("status", "Show recent incidents and monitor health"),
+            ("alerts / recent", "Show evidence and recommended investigation steps"),
+            ("explain", "Highlight the latest alert and explain recorded evidence"),
+            ("logs PATH", "Summarize one local text log"),
+            ("collect DIRECTORY", "Inventory evidence files in one directory"),
+            ("hash FILE", "Calculate a SHA-2 digest without printing file contents"),
+            ("password generate", "Generate a one-time, securely random password"),
+            ("password check", "Check password composition without echoing it"),
+            ("help", "Show these commands"),
+            ("quit", "Stop Sentinel and its monitor"),
+        )
+        print(f"\n{BLUE}╭─ SENTINEL COMMAND CENTER {'─' * 35}{RESET}")
+        for command, description in rows:
+            print(f"{BLUE}│{RESET} {CYAN}{command:<22}{RESET} {description}")
         print(
-            "Sentinel commands: status, alerts, recent, explain, help, quit\n"
-            "File tools: logs PATH [--output REPORT], collect DIRECTORY "
-            "[--output REPORT], hash FILE [--algorithm sha256] [--output REPORT]\n"
-            "Password tools: password generate [--length 20], password check\n"
-            "Analyze newest alert: analyze alert. Run detection while startup monitoring "
-            "is active with the configured source/threshold options."
+            f"{BLUE}╰{'─' * 61}{RESET}\n"
+            f"{DIM}Examples: logs /var/log/auth.log | collect ~/evidence | "
+            f"hash capture.pcap | explain{RESET}\n"
+            f"{DIM}Monitoring rules and sources: sentinel --help{RESET}"
         )
 
     def _show_scan_guidance(self):
@@ -617,6 +801,9 @@ class Sentinel:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in {"help", "-h", "--help"}:
+        _show_cli_help()
+        return 0
     if len(sys.argv) > 1 and sys.argv[1] == "monitor":
         detector_main(sys.argv[2:])
         return 0
@@ -649,22 +836,48 @@ def main():
         parser.error("--no-monitor cannot be combined with monitor options")
 
     monitor = None
+    monitor_thread = None
+    monitor_ready = not args.no_monitor
     if not args.no_monitor:
-        monitor = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "sentinel",
-                "monitor",
-                "--alert-file",
-                args.alert_file,
-                "--database-file",
-                args.database_file,
-                *monitor_options,
-            ]
-        )
+        requested_source = _monitor_source(monitor_options)
+        monitor_ready = _prepare_linux_ufw(requested_source)
+        if monitor_ready:
+            try:
+                monitor = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-u",
+                        "-m",
+                        "sentinel",
+                        "monitor",
+                        "--alert-file",
+                        args.alert_file,
+                        "--database-file",
+                        args.database_file,
+                        *monitor_options,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                )
+            except OSError as error:
+                monitor_ready = False
+                print(
+                    f"{RED}Could not start the Sentinel monitor:{RESET} {error}",
+                    file=sys.stderr,
+                )
     sentinel = Sentinel(os.path.expanduser(args.alert_file), args.database_file)
     try:
+        if monitor:
+            monitor_thread = threading.Thread(
+                target=_relay_monitor_output,
+                args=(monitor, sentinel.stop),
+                daemon=True,
+            )
+            monitor_thread.start()
         sentinel.load_existing()
         watcher = threading.Thread(target=sentinel.watch, daemon=True)
         watcher.start()
@@ -672,9 +885,23 @@ def main():
         scan_animation(enabled=not args.no_animation)
         loading("Loading ML and alert engine", enabled=not args.no_animation)
         loading("Connecting local alert database", enabled=not args.no_animation)
-        if monitor:
+        if monitor_ready:
             loading("Starting platform event monitor", enabled=not args.no_animation)
-        print(f"{GREEN}Sentinel is online{RESET}. Type {YELLOW}'help'{RESET} for commands.")
+            if monitor and monitor.poll() is not None:
+                monitor_ready = False
+                print(
+                    f"{RED}The live monitor exited during startup; the console "
+                    "remains available without live ingestion.{RESET}"
+                )
+        elif not args.no_monitor:
+            print(
+                f"{YELLOW}Console-only mode:{RESET} no live event source was started."
+            )
+        if monitor_ready:
+            state = "Sentinel is online"
+        else:
+            state = "Sentinel console is ready"
+        print(f"{GREEN}{state}{RESET}. Type {YELLOW}'help'{RESET} for commands.")
         while sentinel.answer(input("sentinel> ")):
             pass
     except (KeyboardInterrupt, EOFError):
@@ -689,6 +916,8 @@ def main():
             except subprocess.TimeoutExpired:
                 monitor.kill()
                 monitor.wait()
+            if monitor_thread:
+                monitor_thread.join(timeout=1)
 
 if __name__ == "__main__":
     main()

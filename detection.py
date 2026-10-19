@@ -13,7 +13,13 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from types import SimpleNamespace
 
-from telemetry import SOURCES, follow_source, resolve_source, ufw_adapter
+from telemetry import (
+    SOURCES,
+    TelemetryStore,
+    follow_source,
+    resolve_source,
+    ufw_adapter,
+)
 
 # --- ml_model.py ---
 FEATURE_NAMES = (

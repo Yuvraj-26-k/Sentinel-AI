@@ -39,6 +39,8 @@ from analyst import (
 )
 from sentinel import (
     Sentinel,
+    _monitor_source,
+    _prepare_linux_ufw,
     analyze_log_file,
     collect_main as sentinel_module_collect_main,
     collect_evidence,
@@ -905,6 +907,8 @@ class SentinelUiTests(unittest.TestCase):
                     self.assertTrue(terminal.answer("help"))
                 self.assertIn("password generate", stdout.getvalue())
                 self.assertIn("hash FILE", stdout.getvalue())
+                self.assertIn("SENTINEL COMMAND CENTER", stdout.getvalue())
+                self.assertIn("investigation", stdout.getvalue())
 
                 with patch.object(terminal, "_explain_latest") as explain:
                     self.assertTrue(terminal.answer("analyze"))
@@ -924,6 +928,7 @@ class SentinelUiTests(unittest.TestCase):
 
         process = Mock()
         process.poll.return_value = None
+        process.stdout = io.StringIO()
         terminal = Mock()
         terminal.stop = threading.Event()
         with (
@@ -938,10 +943,38 @@ class SentinelUiTests(unittest.TestCase):
             sentinel_main()
 
         command = launch.call_args.args[0]
-        self.assertEqual(command[:4], [sys.executable, "-m", "sentinel", "monitor"])
+        self.assertEqual(
+            command[:5], [sys.executable, "-u", "-m", "sentinel", "monitor"]
+        )
         self.assertIn("--source", command)
         process.terminate.assert_called_once_with()
         process.wait.assert_called_once_with(timeout=5)
+
+    def test_monitor_startup_failure_is_not_reported_as_online(self):
+        from unittest.mock import Mock
+        import threading
+
+        process = Mock()
+        process.poll.return_value = 1
+        process.stdout = io.StringIO("Sentinel ingestion failed: missing log\n")
+        terminal = Mock()
+        terminal.stop = threading.Event()
+        with (
+            patch("sentinel._monitor_source", return_value="suricata"),
+            patch("sentinel._prepare_linux_ufw", return_value=True),
+            patch("sentinel.subprocess.Popen", return_value=process),
+            patch("sentinel.Sentinel", return_value=terminal),
+            patch("sentinel.banner"),
+            patch("sentinel.scan_animation"),
+            patch("sentinel.loading"),
+            patch("builtins.input", side_effect=EOFError),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            patch.object(sys, "argv", ["sentinel"]),
+        ):
+            sentinel_main()
+        self.assertIn("exited during startup", stdout.getvalue())
+        self.assertIn("console remains available", stdout.getvalue())
+        self.assertNotIn("Sentinel is online", stdout.getvalue())
 
     def test_no_monitor_option_skips_background_monitor(self):
         from unittest.mock import Mock
@@ -960,6 +993,18 @@ class SentinelUiTests(unittest.TestCase):
         ):
             sentinel_main()
 
+        launch.assert_not_called()
+
+    def test_cli_help_is_a_colored_ready_command_reference(self):
+        with (
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            patch.object(sys, "argv", ["sentinel", "--help"]),
+            patch("sentinel.subprocess.Popen") as launch,
+        ):
+            self.assertEqual(sentinel_main(), 0)
+        self.assertIn("SENTINEL SECURITY MONITOR", stdout.getvalue())
+        self.assertIn("sentinel monitor --help", stdout.getvalue())
+        self.assertIn("does not enable the firewall", stdout.getvalue())
         launch.assert_not_called()
 
     def test_no_animation_option_disables_startup_progress_effects(self):
@@ -1044,8 +1089,93 @@ class SentinelUiTests(unittest.TestCase):
             }
         )
         self.assertIn("possible horizontal port scan", rendered)
+        self.assertIn("MEDIUM SEVERITY", rendered)
         self.assertIn("incident-2", rendered)
         self.assertIn("Automatic response: OFF", rendered)
+
+    def test_detector_initializes_telemetry_store_without_name_error(self):
+        from unittest.mock import Mock
+
+        store = Mock()
+        store.path = "events.db"
+        baseline = Mock()
+        with (
+            patch("detection.TelemetryStore", return_value=store) as create_store,
+            patch("detection.Baseline", return_value=baseline),
+            patch("detection.ScanDetector"),
+            patch("detection.ingestion.follow_source", side_effect=KeyboardInterrupt),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            detection.detector_main(
+                ["--source", "suricata", "--database-file", "events.db"]
+            )
+        create_store.assert_called_once_with("events.db")
+        store.update_health.assert_any_call("suricata", "starting")
+        store.update_health.assert_any_call("suricata", "stopped")
+        baseline.save.assert_called_once_with()
+
+    def test_monitor_source_defaults_to_ufw_only_on_linux(self):
+        with patch("sentinel.sys.platform", "linux"):
+            self.assertEqual(_monitor_source([]), "ufw")
+            self.assertEqual(_monitor_source(["--source", "suricata"]), "suricata")
+            self.assertEqual(_monitor_source(["--source=zeek"]), "zeek")
+
+    def test_ufw_setup_decline_never_runs_system_commands(self):
+        from unittest.mock import Mock
+
+        with (
+            patch("sentinel.sys.platform", "linux"),
+            patch("sentinel.sys.stdin.isatty", return_value=True),
+            patch("sentinel.shutil.which", side_effect=lambda name: {
+                "ufw": None,
+                "apt-get": "/usr/bin/apt-get",
+            }.get(name)),
+        ):
+            run = Mock()
+            self.assertFalse(_prepare_linux_ufw("ufw", input_fn=lambda _: "n", run=run))
+        run.assert_not_called()
+
+    def test_ufw_install_and_logging_each_require_consent(self):
+        from types import SimpleNamespace
+
+        which_results = {
+            "ufw": iter((None, "/usr/sbin/ufw")),
+            "apt-get": iter(("/usr/bin/apt-get",)),
+        }
+        commands = []
+
+        def which(name):
+            result = which_results.get(name)
+            return next(result) if result else None
+
+        def run(command, **kwargs):
+            commands.append(command)
+            if command[-2:] == ["status", "verbose"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="Logging: off",
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with (
+            patch("sentinel.sys.platform", "linux"),
+            patch("sentinel.sys.stdin.isatty", return_value=True),
+            patch("sentinel.shutil.which", side_effect=which),
+            patch("sentinel.Path.exists", return_value=False),
+        ):
+            answers = iter(("yes", "yes"))
+            self.assertTrue(
+                _prepare_linux_ufw("ufw", input_fn=lambda _: next(answers), run=run)
+            )
+        self.assertEqual(
+            commands,
+            [
+                ["sudo", "apt-get", "install", "-y", "ufw"],
+                ["/usr/sbin/ufw", "status", "verbose"],
+                ["sudo", "/usr/sbin/ufw", "logging", "on"],
+            ],
+        )
 
 # --- test_smart_detector.py ---
 class SmartDetectorTests(unittest.TestCase):
