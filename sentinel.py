@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import textwrap
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -710,6 +711,8 @@ class Sentinel:
     def answer(self, command):
         command = command.strip()
         normalized = command.lower()
+        if normalized in {"1", "2", "3", "4", "5", "6", "7", "8"}:
+            self._show_menu(selected=normalized)
         if normalized == "8" or normalized in {"quit", "exit", "q"}:
             return False
         menu_commands = {
@@ -1040,60 +1043,127 @@ class Sentinel:
             print("\nNavigation cancelled.")
             return None
 
-    def _show_menu(self):
-        options = (
-            ("1", "Status"),
-            ("2", "Recent alerts"),
-            ("3", "Explain latest alert"),
-            ("4", "Search Google (browser sign-in on first use)"),
-            ("5", "Latest report"),
-            ("6", "Tools"),
-            ("7", "Help"),
-            ("8", "Exit"),
+    @staticmethod
+    def _show_navigation_menu(title, options, selected=None, hint=""):
+        terminal_width = shutil.get_terminal_size((100, 24)).columns
+        width = max(80, min(terminal_width, 120))
+        left_content_width = min(28, max(22, width // 3))
+        right_content_width = width - left_content_width - 9
+        left_border = "+" + "-" * (left_content_width + 2) + "+"
+        right_border = "+" + "-" * (right_content_width + 2) + "+"
+        selected_option = next(
+            (option for option in options if option[0] == selected),
+            None,
         )
-        print(f"\n{BLUE}╭─ SENTINEL MAIN MENU {'─' * 40}{RESET}")
-        for number, label in options:
-            print(f"{BLUE}│{RESET} {CYAN}{number}{RESET}  {label}")
+        if selected_option:
+            detail_title = f"{selected_option[0]}. {selected_option[1]}"
+            description = selected_option[2]
+        else:
+            detail_title = "Choose an option"
+            description = "Select a numbered action to see what Sentinel will do."
+
+        left_lines = []
+        for number, label, _ in options:
+            prefix = "> " if number == selected else "  "
+            option_lines = textwrap.wrap(
+                f"{prefix}{number}. {label}",
+                width=left_content_width,
+                subsequent_indent="   ",
+            ) or [prefix.rstrip()]
+            left_lines.extend(option_lines)
+        left_lines.append("")
+
+        right_lines = textwrap.wrap(
+            detail_title,
+            width=right_content_width,
+        ) or [detail_title]
+        right_lines.extend(
+            textwrap.wrap(description, width=right_content_width) or [""]
+        )
+        if hint:
+            right_lines.append("")
+            right_lines.extend(textwrap.wrap(hint, width=right_content_width))
+        rows = max(len(left_lines), len(right_lines))
+
+        print(f"\n{BLUE}{left_border}  {right_border}{RESET}")
         print(
-            f"{BLUE}╰{'─' * 61}{RESET}\n"
-            f"{DIM}Choose a number, or type a question / command.{RESET}"
+            f"{BLUE}|{CYAN} {title.upper():<{left_content_width}} {BLUE}|  "
+            f"|{MAGENTA} {'WHAT THIS DOES':<{right_content_width}} {BLUE}|{RESET}"
         )
+        print(f"{BLUE}{left_border}  {right_border}{RESET}")
+        for index in range(rows):
+            left = left_lines[index] if index < len(left_lines) else ""
+            right = right_lines[index] if index < len(right_lines) else ""
+            left_color = CYAN if selected_option and left.startswith(">") else ""
+            print(
+                f"{BLUE}|{left_color} {left:<{left_content_width}}{BLUE} |  "
+                f"|{MAGENTA} {right:<{right_content_width}} {BLUE}|{RESET}"
+            )
+        print(f"{BLUE}{left_border}  {right_border}{RESET}")
 
-    @staticmethod
-    def _show_tools_menu():
+    def _show_menu(self, selected=None):
         options = (
-            ("1", "Analyze a log file"),
-            ("2", "Collect evidence files"),
-            ("3", "Hash a file"),
-            ("4", "Password tools"),
-            ("5", "Back to Main Menu"),
-            ("6", "Exit"),
+            ("1", "Status", "Show monitoring readiness and recent scan alerts."),
+            ("2", "Recent alerts", "List recent detected incidents and their severity."),
+            ("3", "Explain latest alert", "Show recorded evidence and safe investigation steps."),
+            ("4", "Search Google", "Search a question online; browser sign-in may be needed the first time."),
+            ("5", "Latest report", "Display the most recent analysis or research report."),
+            ("6", "Tools", "Open log analysis, evidence collection, hashing, and password tools."),
+            ("7", "Help", "Show commands and guidance for using Sentinel."),
+            ("8", "Exit", "Stop the console and its background monitor."),
         )
-        print(f"\n{BLUE}╭─ TOOLS MENU {'─' * 48}{RESET}")
-        for number, label in options:
-            print(f"{BLUE}│{RESET} {CYAN}{number}{RESET}  {label}")
-        print(f"{BLUE}╰{'─' * 61}{RESET}")
+        self._show_navigation_menu(
+            "Sentinel Main Menu",
+            options,
+            selected,
+            "Choose a number, or type a question / command.",
+        )
 
     @staticmethod
-    def _show_password_menu():
+    def _show_tools_menu(selected=None):
         options = (
-            ("1", "Generate a password"),
-            ("2", "Check password composition"),
-            ("3", "Back to Tools"),
-            ("4", "Exit"),
+            ("1", "Analyze a log file", "Summarize one local log and identify useful indicators."),
+            ("2", "Collect evidence files", "List metadata for supported files in one directory."),
+            ("3", "Hash a file", "Calculate a SHA-2 digest without displaying file contents."),
+            ("4", "Password tools", "Generate a password or check its composition securely."),
+            ("5", "Back to Main Menu", "Return to the main Sentinel navigation menu."),
+            ("6", "Exit", "Stop Sentinel and its background monitor."),
         )
-        print(f"\n{BLUE}╭─ PASSWORD TOOLS {'─' * 44}{RESET}")
-        for number, label in options:
-            print(f"{BLUE}│{RESET} {CYAN}{number}{RESET}  {label}")
-        print(f"{BLUE}╰{'─' * 61}{RESET}")
+        Sentinel._show_navigation_menu(
+            "Tools Menu",
+            options,
+            selected,
+            "Reports are shown before Sentinel asks whether to save them.",
+        )
 
     @staticmethod
-    def _show_tool_navigation(back_label):
-        print(f"\n{BLUE}╭─ NEXT {'─' * 54}{RESET}")
-        print(f"{BLUE}│{RESET} {CYAN}1{RESET}  Back to {back_label}")
-        print(f"{BLUE}│{RESET} {CYAN}2{RESET}  Main Menu")
-        print(f"{BLUE}│{RESET} {CYAN}3{RESET}  Exit")
-        print(f"{BLUE}╰{'─' * 61}{RESET}")
+    def _show_password_menu(selected=None):
+        options = (
+            ("1", "Generate a password", "Create a random one-time password; it is displayed once and never saved."),
+            ("2", "Check password composition", "Check length and character variety without echoing the password."),
+            ("3", "Back to Tools", "Return to the Tools submenu."),
+            ("4", "Exit", "Stop Sentinel and its background monitor."),
+        )
+        Sentinel._show_navigation_menu(
+            "Password Tools",
+            options,
+            selected,
+            "Generated passwords are not added to reports.",
+        )
+
+    @staticmethod
+    def _show_tool_navigation(back_label, selected=None):
+        options = (
+            ("1", f"Back to {back_label}", "Return to the previous menu."),
+            ("2", "Main Menu", "Return to the Sentinel Main Menu."),
+            ("3", "Exit", "Stop Sentinel and its background monitor."),
+        )
+        Sentinel._show_navigation_menu(
+            "Navigation",
+            options,
+            selected,
+            "Choose where to go after this tool finishes.",
+        )
 
     def _run_tools_menu(self):
         handlers = {
@@ -1104,6 +1174,8 @@ class Sentinel:
         while True:
             self._show_tools_menu()
             choice = self._read_navigation_choice("Tools: ")
+            if choice is not None:
+                self._show_tools_menu(selected=choice)
             if choice is None or choice == "5":
                 self._show_menu()
                 return True
@@ -1129,6 +1201,8 @@ class Sentinel:
                 print("Action cancelled; no path was provided.")
             self._show_tool_navigation("Tools")
             navigation = self._read_navigation_choice("Next: ")
+            if navigation is not None:
+                self._show_tool_navigation("Tools", selected=navigation)
             if navigation == "2":
                 self._show_menu()
                 return True
@@ -1139,6 +1213,8 @@ class Sentinel:
         while True:
             self._show_password_menu()
             choice = self._read_navigation_choice("Password tools: ")
+            if choice is not None:
+                self._show_password_menu(selected=choice)
             if choice is None or choice == "3":
                 return "tools"
             if choice == "4":
@@ -1159,6 +1235,8 @@ class Sentinel:
 
             self._show_tool_navigation("Password Tools")
             navigation = self._read_navigation_choice("Next: ")
+            if navigation is not None:
+                self._show_tool_navigation("Password Tools", selected=navigation)
             if navigation == "2":
                 return "main"
             if navigation == "3":

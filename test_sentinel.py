@@ -1277,16 +1277,37 @@ class SentinelUiTests(unittest.TestCase):
                     self.assertTrue(terminal.answer("menu"))
                 rendered = output.getvalue()
                 self.assertIn("SENTINEL MAIN MENU", rendered)
-                self.assertIn("1  Status", rendered)
-                self.assertIn("2  Recent alerts", rendered)
-                self.assertIn("3  Explain latest alert", rendered)
-                self.assertIn("4  Search Google", rendered)
-                self.assertIn("6  Tools", rendered)
-                self.assertIn("7  Help", rendered)
-                self.assertIn("8  Exit", rendered)
+                self.assertIn("1. Status", rendered)
+                self.assertIn("2. Recent alerts", rendered)
+                self.assertIn("3. Explain latest alert", rendered)
+                self.assertIn("4. Search Google", rendered)
+                self.assertIn("6. Tools", rendered)
+                self.assertIn("7. Help", rendered)
+                self.assertIn("8. Exit", rendered)
+                self.assertIn("WHAT THIS DOES", rendered)
+                self.assertIn("Select a numbered action", rendered)
                 self.assertNotIn("FEATURES", rendered)
                 self.assertNotIn("LATEST REPORT", rendered)
                 self.assertNotIn("Example saved-safe report", rendered)
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_selected_menu_action_shows_its_description_in_right_panel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            output = io.StringIO()
+            try:
+                with patch("sys.stdout", output):
+                    terminal._show_menu(selected="4")
+                rendered = output.getvalue()
+                self.assertIn("> 4. Search Google", rendered)
+                self.assertIn("4. Search Google", rendered)
+                self.assertIn("browser sign-in may be needed", rendered)
+                self.assertIn("|  |", rendered)
             finally:
                 if terminal.store:
                     terminal.store.engine.dispose()

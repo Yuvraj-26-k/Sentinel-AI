@@ -150,7 +150,9 @@ and its monitor. Use `sentinel --no-monitor` to open only the console.
 Use `sentinel --no-animation` to skip the startup progress effects while
 keeping the banner and interactive console.
 
-The main navigation menu offers:
+The main navigation menu shows each action on the left and a description of
+what it does in a panel on the right. After choosing an option, the right panel
+highlights that action before it runs. The main menu offers:
 
 | Number | Action |
 | --- | --- |
@@ -166,7 +168,8 @@ The main navigation menu offers:
 The **Tools** submenu contains log analysis, evidence collection, file hashing,
 and a nested password-tools menu. Each tool has navigation to go back to its
 parent menu, return to the main menu, or exit Sentinel. The password submenu
-also has explicit Back and Exit options.
+also has explicit Back and Exit options. Tool and password menus use the same
+right-side action descriptions.
 
 You can also type commands or ask questions directly:
 
