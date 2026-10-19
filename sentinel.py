@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+import subprocess
 import threading
 import time
 from collections import deque
@@ -15,7 +16,6 @@ from analyst import (
     verified_ai_analysis,
 )
 from detection import detector_main
-from telemetry import TelemetryStore
 
 # --- sentinel.py ---
 #!/usr/bin/env python3
@@ -208,24 +208,56 @@ def main():
     parser = argparse.ArgumentParser(description="Sentinel terminal security monitor")
     parser.add_argument("--alert-file", default=os.path.expanduser("~/.sentinel_alerts.jsonl"))
     parser.add_argument("--database-file", default=os.path.expanduser("~/.sentinel.db"))
-    args = parser.parse_args()
+    parser.add_argument(
+        "--no-monitor",
+        action="store_true",
+        help="Open the alert console without starting an event monitor",
+    )
+    args, monitor_options = parser.parse_known_args()
+    if args.no_monitor and monitor_options:
+        parser.error("--no-monitor cannot be combined with monitor options")
+
+    monitor = None
+    if not args.no_monitor:
+        monitor = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "sentinel",
+                "monitor",
+                "--alert-file",
+                args.alert_file,
+                "--database-file",
+                args.database_file,
+                *monitor_options,
+            ]
+        )
     sentinel = Sentinel(os.path.expanduser(args.alert_file), args.database_file)
-    sentinel.load_existing()
-    watcher = threading.Thread(target=sentinel.watch, daemon=True)
-    watcher.start()
-    banner()
-    scan_animation()
-    loading("Loading ML and alert engine")
-    loading("Connecting local alert database")
-    loading("Starting live event watcher")
-    print(f"{GREEN}Sentinel is online{RESET}. Type {YELLOW}'help'{RESET} for commands.")
     try:
+        sentinel.load_existing()
+        watcher = threading.Thread(target=sentinel.watch, daemon=True)
+        watcher.start()
+        banner()
+        scan_animation()
+        loading("Loading ML and alert engine")
+        loading("Connecting local alert database")
+        if monitor:
+            loading("Starting platform event monitor")
+        print(f"{GREEN}Sentinel is online{RESET}. Type {YELLOW}'help'{RESET} for commands.")
         while sentinel.answer(input("sentinel> ")):
             pass
     except (KeyboardInterrupt, EOFError):
         print("\nSentinel stopped.")
     finally:
         sentinel.stop.set()
+        if monitor:
+            if monitor.poll() is None:
+                monitor.terminate()
+            try:
+                monitor.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                monitor.kill()
+                monitor.wait()
 
 if __name__ == "__main__":
     main()
