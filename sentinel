@@ -13,7 +13,8 @@ Run from this project directory:
   ./sentinel
 
 It creates/activates the local virtual environment, installs dependencies,
-enables UFW logging when available, starts the detector, and opens the chatbot.
+enables UFW logging on Linux when available, starts the platform-default detector,
+and opens the chatbot.
 Optional Gemini configuration is read from GEMINI_API_KEY and GEMINI_MODEL.
 HELP
     exit 0
@@ -27,30 +28,38 @@ fi
 echo "[Sentinel] Installing/checking dependencies..."
 .venv/bin/python -m pip install -q -r requirements.txt
 
-if command -v ufw >/dev/null 2>&1; then
+if [[ "$(uname -s)" == "Linux" ]] && command -v ufw >/dev/null 2>&1; then
     echo "[Sentinel] Enabling UFW logging (sudo may ask for your password)..."
     if ! sudo ufw logging on; then
         echo "[Sentinel] Warning: could not enable UFW logging. Continuing." >&2
     fi
-else
+elif [[ "$(uname -s)" == "Linux" ]]; then
     echo "[Sentinel] Warning: ufw is not installed. Use another supported log source." >&2
 fi
 
 ALERT_FILE="${SENTINEL_ALERT_FILE:-$HOME/.sentinel_alerts.jsonl}"
 MODEL_FILE="${SENTINEL_MODEL_FILE:-$HOME/.nmap_ai_baseline.json}"
-LOG_FILE="${SENTINEL_LOG_FILE:-/var/log/ufw.log}"
+DATABASE_FILE="${SENTINEL_DATABASE_FILE:-$HOME/.sentinel.db}"
+SOURCE="${SENTINEL_SOURCE:-auto}"
+API_PORT="${SENTINEL_API_PORT:-8000}"
 
-mkdir -p "$(dirname "$ALERT_FILE")" "$(dirname "$MODEL_FILE")"
-echo "[Sentinel] Starting detector and chatbot..."
-.venv/bin/python smart_detector.py \
-    --log-file "$LOG_FILE" \
-    --model-file "$MODEL_FILE" \
-    --alert-file "$ALERT_FILE" &
+mkdir -p "$(dirname "$ALERT_FILE")" "$(dirname "$MODEL_FILE")" "$(dirname "$DATABASE_FILE")"
+export SENTINEL_DATABASE_FILE="$DATABASE_FILE"
+echo "[Sentinel] Starting detector, local alert API, and terminal assistant..."
+DETECTOR_ARGS=(--source "$SOURCE" --model-file "$MODEL_FILE" --alert-file "$ALERT_FILE" --database-file "$DATABASE_FILE")
+if [[ -n "${SENTINEL_LOG_FILE:-}" ]]; then
+    DETECTOR_ARGS+=(--log-file "$SENTINEL_LOG_FILE")
+fi
+.venv/bin/python smart_detector.py "${DETECTOR_ARGS[@]}" &
 DETECTOR_PID=$!
+.venv/bin/python -m uvicorn api:app --host 127.0.0.1 --port "$API_PORT" &
+API_PID=$!
 
 cleanup() {
     kill "$DETECTOR_PID" 2>/dev/null || true
+    kill "$API_PID" 2>/dev/null || true
     wait "$DETECTOR_PID" 2>/dev/null || true
+    wait "$API_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
