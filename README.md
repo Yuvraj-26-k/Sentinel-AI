@@ -1,192 +1,216 @@
 # Sentinel-AI
 
-Sentinel-AI is a **defensive, local-first network event monitoring prototype**. Platform and sensor adapters normalize native firewall and connection telemetry into one event schema. The existing detector uses those events to detect one source probing many destination ports within a rolling window, stores alerts locally, and provides a terminal console for reviewing them.
+**Local-first network security monitoring in your terminal.** Sentinel-AI
+normalizes firewall and network-sensor logs, detects possible scans, scores
+unusual behavior, and keeps an evidence-backed incident history. It runs on
+Linux, Windows, and macOS, with optional Suricata and Zeek input.
 
-It is not an intrusion-prevention system, a packet capture engine, or a general-purpose AI. It **does not block IPs, change firewall rules after setup, execute response actions, or guarantee that an event is malicious**.
+Sentinel is a defensive monitoring tool—not an intrusion-prevention system. It
+does not block traffic, change firewall rules, or claim that an alert proves
+an attack.
 
-## What Sentinel actually does
+## Features
 
-1. `smart_detector.py` ingests normalized events from a platform-native stream or a supported log file.
-2. It keeps a rolling 60-second window per source IP and applies explicit scan rules.
-3. A locally trained Isolation Forest scores event volume, port and destination diversity, rates, inter-arrival timing, and active span after sufficient normal history is collected.
-4. It writes JSON Lines alerts to `~/.sentinel_alerts.jsonl` by default. Alerts include rule signals, ML/statistical scores, source telemetry, and behavioral evidence when available.
-5. `sentinel.py` shows new alerts in a terminal, persists them locally through SQLAlchemy, and provides evidence-bound investigation guidance.
-6. `rag_agent.py` performs transparent local retrieval from reviewed Markdown guidance; retrieval is separate from the trained anomaly model and does not treat documents as telemetry evidence.
+- **One event format:** UFW, Windows Filtering Platform and Firewall, Sysmon,
+  macOS unified logs, Suricata EVE JSON, and Zeek connection logs.
+- **Useful scan rules:** configurable vertical, horizontal, slow, SYN, and
+  connection-failure detection when the source provides the necessary signals.
+- **Local anomaly scoring:** an Isolation Forest scores event volume, port and
+  destination diversity, rate, timing, and active duration after it has enough
+  normal history. Scores are not probabilities or proof of malicious activity.
+- **Incident history:** SQLite storage, duplicate-event handling, incident
+  aggregation, event timelines, source health, and restart recovery.
+- **Evidence-grounded analysis:** local triage guidance and optional Gemini
+  analysis can only surface alert evidence and approved investigation steps.
+- **Animated terminal experience:** colored startup banner, scanning progress
+  animation, live incident output, and interactive alert commands. Animation
+  and colors are disabled in non-interactive output; `NO_COLOR` disables color.
+- **CLI-only interface:** inspect live alerts and incidents directly in the
+  terminal; no web server or dashboard is installed.
 
 ## Requirements
 
 - Python 3.10 or newer
-- Linux, Windows, or macOS; UFW is the default Linux source
-- Permission to read the selected event log or native event stream
-- Internet access only for the one-time Python dependency install or optional Gemini explanation feature
+- Internet access for the initial dependency installation
+- Permission to read the selected firewall or sensor log
+- Optional: `GEMINI_API_KEY` for cloud-assisted explanations
 
-The detector uses scikit-learn for its local Isolation Forest. The interactive console's SQLite alert history uses SQLAlchemy; both are installed from `requirements.txt`.
+## Installation
 
-## Install
+Clone the repository and enter its directory:
 
-```bash
-cd /path/to/Sentinel-AI
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
+```sh
+git clone https://github.com/Yuvraj-26-k/Sentinel-AI.git
+cd Sentinel-AI
 ```
 
-Do not run the console as root. Only use elevated privileges when your operating system requires them to enable or read a protected firewall log.
+Create a virtual environment and install dependencies. Use the commands for
+your operating system.
 
-## Quick start
+### Linux
 
-The automatic source is platform-specific: Linux follows UFW, Windows reads Windows Filtering Platform events and available Sysmon network events, and macOS follows unified firewall/network logs. Use `--source` to select another adapter.
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-### Linux with UFW
+For the default UFW source, enable firewall logging once:
 
-Enable UFW logging once if you administer this host:
-
-```bash
+```sh
 sudo ufw logging on
 ```
 
+Make sure your account can read `/var/log/ufw.log`. For example, on systems
+with ACL support, grant your account read access rather than running the whole
+application as root:
+
+```sh
+sudo setfacl -m "u:$USER:r" /var/log/ufw.log
+```
+
+### macOS
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+The default source streams macOS unified logs with the built-in `log` utility.
+Some records omit network endpoints; those records cannot be used for port
+scan detection.
+
+### Windows PowerShell
+
+Install Python 3.10 or newer, then run:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+The default source reads Windows Filtering Platform Security events. To
+collect connection events, enable the Windows audit subcategory from an
+elevated PowerShell prompt:
+
+```powershell
+auditpol /set /subcategory:"Filtering Platform Connection" /success:enable /failure:enable
+```
+
+The account running Sentinel also needs permission to read the Security event
+log. Sysmon network-connect events are included when Sysmon is already
+installed and accessible; Sysmon is optional.
+
+## Run Sentinel
+
 Start the detector in one terminal:
 
-```bash
-cd /path/to/Sentinel-AI
-sudo .venv/bin/python smart_detector.py \
-  --source ufw \
-  --alert-file "$HOME/.sentinel_alerts.jsonl" \
-  --model-file "$HOME/.nmap_ai_baseline.json"
+```sh
+python sentinel.py monitor
 ```
 
-Start the console in a second terminal:
-
-```bash
-cd /path/to/Sentinel-AI
-.venv/bin/python sentinel.py --alert-file "$HOME/.sentinel_alerts.jsonl"
-```
-
-Use `help`, `status`, `alerts`, `recent`, `explain`, or `quit` in the console.
-
-### One-command launcher
-
-```bash
-./sentinel
-```
-
-The launcher creates `.venv` when missing, installs dependencies, attempts to enable UFW logging on Linux, starts `smart_detector.py` with the platform's automatic source, then opens the terminal console. It does not automatically block a source. Set `SENTINEL_SOURCE` to choose an adapter and `SENTINEL_LOG_FILE` for a file-based source:
-
-```bash
-export SENTINEL_LOG_FILE=/path/to/firewall.log
-export SENTINEL_SOURCE=windows-firewall
-export SENTINEL_ALERT_FILE="$HOME/.sentinel_alerts.jsonl"
-export SENTINEL_MODEL_FILE="$HOME/.nmap_ai_baseline.json"
-./sentinel
-```
-
-## Supported ingestion sources
-
-Every adapter emits the same event fields: timestamp, platform, sensor, source, destination, destination port, protocol, action, event type, and the original record. Events without a usable destination port are ignored by the port-scan detector.
-
-- **Linux:** UFW/kernel firewall logs (`ufw`, default); supports `SRC=`, `DST=`, `DPT=`, `PROTO=`, and UFW actions.
-- **Windows:** native Windows Filtering Platform Security events 5156/5157 plus Sysmon network-connect event 3 (`windows-native`, default); Windows Firewall W3C logs are available with `windows-firewall`. Enable WFP connection auditing and grant access to the Security log. Sysmon is optional; unavailable Sysmon telemetry is reported and does not disable WFP collection.
-- **macOS:** native unified logs for `socketfilterfw`, `com.apple.alf`, and `com.apple.network` (`macos-unified`, default). Only records with parseable source/destination addresses and destination ports enter the port-scan detector; unified messages that omit endpoints cannot contribute.
-- **Network sensors:** Suricata EVE JSON (`suricata`) and Zeek `conn.log` TSV/JSON (`zeek`).
-
-Follow a Suricata EVE JSON file:
+Open a second terminal in the repository directory, activate the same virtual
+environment, and start the interactive alert console:
 
 ```sh
-.venv/bin/python smart_detector.py --source suricata --log-file /var/log/suricata/eve.json
+python sentinel.py
 ```
 
-Follow a Zeek connection log:
+The monitor uses the platform's default source: UFW on Linux, Windows Filtering
+Platform on Windows, and unified logs on macOS. The console follows the alert
+file and accepts these commands:
+
+| Command | What it does |
+| --- | --- |
+| `status` | Show recent alerts |
+| `alerts` / `recent` | List recent incidents |
+| `explain` | Show evidence and safe investigation steps |
+| `help` | Show commands |
+| `quit` | Exit the console |
+
+Stop the monitor with `Ctrl+C`; the baseline and source status are saved.
+Animation is shown only in a terminal and can be disabled by redirecting
+output. Set `NO_COLOR=1` to disable colors.
+
+### Select a source
+
+Pass a source to the monitor. File-based sources start at the current end of
+the file and follow new records:
 
 ```sh
-.venv/bin/python smart_detector.py --source zeek --log-file /usr/local/zeek/logs/current/conn.log
+python sentinel.py monitor --source ufw
+python sentinel.py monitor --source windows-firewall --log-file "C:\Windows\System32\LogFiles\Firewall\pfirewall.log"
+python sentinel.py monitor --source suricata --log-file /var/log/suricata/eve.json
+python sentinel.py monitor --source zeek --log-file /usr/local/zeek/logs/current/conn.log
 ```
 
-Follow Windows Firewall W3C output (use `SENTINEL_SOURCE=windows-firewall` and optionally set `SENTINEL_LOG_FILE`; default path is the Windows Firewall log directory). For native defaults, run `python smart_detector.py --source auto`. File-based sources begin at the end of their log and process newly appended records.
+Supported sources are `auto`, `ufw`, `windows-firewall`, `windows-native`,
+`macos-unified`, `suricata`, and `zeek`. UFW is the default Linux source;
+Windows Firewall W3C files and the native Windows event stream are separate
+options. Suricata consumes EVE JSON and Zeek consumes `conn.log` TSV.
 
-## Detection and baseline behavior
-
-- Rolling window: 60 seconds
-- Deterministic rules: 15 unique destination ports, or 15 or more events with at least 1 unique destination port per active second; the rolling window is 60 seconds
-- Isolation Forest features: event count, unique ports, port rate, unique destinations, destination rate, mean and standard deviation of inter-arrival time, and active span
-- ML training: 30 normal feature samples per source are required; Sentinel records at most one sample per source every 10 seconds and excludes rule- or model-suspicious windows
-- Model persistence: bounded recent samples and the existing statistical baseline are stored in the JSON model file; model fitting is local and reproducible
-- ML score: raw Isolation Forest decision distance, not a probability or a trained malicious/benign classifier; negative decision-function values are flagged
-- Incident merge interval: 900 seconds by default, independently configurable
-
-Suspicious windows are not added to either baseline. Training is unsupervised and learns observed normal behavior; it does not establish malicious intent. Delete the model file to reset the learned history. A high score is a signal for review, not proof of an attack.
-
-### Scan detection thresholds
-
-The CLI accepts `--scan-window-seconds`, `--vertical-ports`, `--horizontal-window-seconds`, `--horizontal-hosts`, `--horizontal-min-events`, `--horizontal-max-ports`, `--slow-window-seconds`, `--slow-ports`, `--syn-ports`, `--failure-events`, and `--incident-merge-seconds`. All thresholds must be positive integers. Defaults detect vertical scans per source-and-destination pair, horizontal scans by one source across many hosts on a few ports, slow vertical scans across 15 minutes, and SYN/failure sweeps only when the adapter supplies relevant flags or connection outcomes. A generic log record yields a **possible** scan classification, never a claim that a scan or compromise is confirmed.
-
-Each distinct observation is retained and associated with an open incident. Repeated observations update incident counts and evidence instead of being hidden by an alert cooldown. Events are deduplicated on stable sensor event identifiers when available, otherwise on a canonical event fingerprint.
-
-## Durable telemetry API
-
-The SQLite database at `~/.sentinel.db` stores normalized events, incident timelines, and ingestion health; recent events are replayed on startup to warm bounded in-memory detection windows. Event timestamps are kept separately from ingestion timestamps. Implausibly future source clocks are clamped for detection while the original timestamp and clock skew remain in telemetry. File-based sources detect truncation and rotation; malformed records are skipped without terminating ingestion. Source clock skew and fallback timestamp quality are recorded on each event.
-
-Sentinel remains a terminal-first application; the optional API has no hosted dashboard or interactive API docs. The one-command launcher starts the read-only API bound to loopback at port `8000` by default. Override with `SENTINEL_API_PORT`. To run it separately:
+Additional thresholds can be configured, for example:
 
 ```sh
-.venv/bin/python -m uvicorn api:app --host 127.0.0.1 --port 8000
+python sentinel.py monitor --source auto --scan-window-seconds 60 --vertical-ports 15 --horizontal-hosts 10 --slow-window-seconds 900
 ```
 
-Read-only endpoints:
+See `python sentinel.py monitor --help` for all thresholds and data-file
+options. Events without a destination port are retained where supported but
+cannot contribute to port-scan detection.
 
-- `GET /api/health` — stored-event and open-incident counts plus source health
-- `GET /api/events?limit=100` — recent event telemetry
-- `GET /api/incidents?limit=100` — incident history
-- `GET /api/incidents/{incident_id}` — incident evidence and event timeline
-- `GET /api/stream` — server-sent event stream for new telemetry
+### Optional local analysis and Gemini
 
-The API intentionally binds to `127.0.0.1`; do not expose it publicly without adding authentication and transport security.
+Run a local example analysis or search the built-in triage guidance:
 
-## Local analyst and knowledge retrieval
-
-Analyze supplied scan features:
-
-```bash
-.venv/bin/python rag_agent.py --source 192.0.2.10 --events 20 --unique-ports 18 --duration 10
+```sh
+python sentinel.py analyze --source 192.0.2.10 --events 20 --unique-ports 18 --duration 10
+python sentinel.py analyze --query "correlate firewall events"
 ```
 
-Search the local guidance:
+To enable Gemini explanations, set `GEMINI_API_KEY` and optionally
+`GEMINI_MODEL`. Gemini receives the selected alert context; its free-form
+claims are not shown. Sentinel validates proposed evidence against the alert
+and restricts investigation steps to an allow-list. Without a key, local
+evidence-bound analysis still works.
 
-```bash
-.venv/bin/python rag_agent.py --query "port scan response"
+## Detection and data
+
+Vertical scans are grouped by source and destination. Horizontal detection
+looks for a source probing many hosts on a small set of ports. Slow, SYN, and
+connection-failure patterns are only classified when configured thresholds
+are met and telemetry supports the distinction. Otherwise Sentinel reports a
+**possible scan**.
+
+The Isolation Forest is unsupervised and requires at least 30 normal feature
+samples per source before scoring. Its raw decision score is not a probability.
+Suspicious windows are excluded from normal training samples.
+
+By default, Sentinel stores its SQLite event and incident database at
+`~/.sentinel.db`, alert JSON Lines at `~/.sentinel_alerts.jsonl`, and model
+history at `~/.nmap_ai_baseline.json`. Override paths with the monitor's
+`--database-file`, `--alert-file`, and `--model-file` options.
+
+## Project layout
+
+The repository keeps the runtime in four cohesive Python modules, one
+consolidated regression test file, this guide, the dependency list, and
+`.gitignore`—eight project files total. The runtime modules group telemetry, detection, analysis, and the terminal
+interface.
+
+## Tests
+
+Run the full regression suite:
+
+```sh
+python -m unittest -v test_sentinel
 ```
 
-`rag_agent.py` combines fixed rules, available per-source Isolation Forest and statistical scores, and keyword-matched excerpts from `knowledge/*.md`. Its output is an explainable JSON recommendation, not autonomous action.
-
-## Optional Gemini explanation
-
-The `explain` console command always provides a local evidence summary and safe investigation steps. If you intentionally configure `GEMINI_API_KEY`, Gemini may select telemetry fields and approved investigation steps, but Sentinel discards free-form claims and validates every selected field/value against the alert before displaying it:
-
-```bash
-export GEMINI_API_KEY="your_private_key"
-export GEMINI_MODEL="gemini-2.0-flash"
-.venv/bin/python sentinel.py
-```
-
-Without a key, Sentinel uses its local evidence-bound explanation. Never commit an API key. Supplying a key sends the selected alert context to that provider; AI output is not trusted as telemetry or as a response action.
-
-## Safe authorized test
-
-Only from a system you own or are explicitly authorized to test:
-
-```bash
-nmap -sS -p 1-100 <authorized-test-host>
-```
-
-Review the resulting alert and corroborate it with host, firewall, and network telemetry before any response decision.
-
-## Validate changes
-
-```bash
-.venv/bin/python -m unittest -v test_smart_detector.py
-.venv/bin/python -m unittest -v test_event_adapters.py
-.venv/bin/python -m unittest -v test_ml_analyst.py
-.venv/bin/python -m unittest -v test_incident_pipeline.py test_api.py
-.venv/bin/python -m unittest -v test_sentinel_ui.py
-```
-
-These tests cover adapter normalization, ML scoring, evidence validation, and alert paths. They do not validate operating-system audit policy, permissions, real firewall behavior, packet capture, or production incident response workflows.
+The tests cover platform adapters, detection, anomaly scoring, incident
+persistence, rotation, CLI behavior, and evidence validation. They cannot
+verify operating-system audit settings, real firewall behavior, permissions,
+or production incident response.

@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Interactive terminal assistant for SentinelAI alerts."""
-
 import argparse
 import json
 import os
@@ -8,23 +5,22 @@ import sys
 import threading
 import time
 from collections import deque
+from analyst import (
+    AlertStore,
+    analyst_main,
+    chat as chat_with_gemini,
+    explain_alert as explain_with_gemini,
+    format_analysis,
+    local_analysis,
+    verified_ai_analysis,
+)
+from detection import detector_main
+from telemetry import TelemetryStore
 
-try:
-    from alert_store import AlertStore
-except ImportError:
-    AlertStore = None
+# --- sentinel.py ---
+#!/usr/bin/env python3
+"""Interactive terminal assistant for SentinelAI alerts."""
 
-try:
-    from cloud_llm import chat as chat_with_gemini
-except ImportError:
-    chat_with_gemini = None
-
-try:
-    from cloud_llm import explain_alert as explain_with_gemini
-except ImportError:
-    explain_with_gemini = None
-
-from security_analyst import format_analysis, local_analysis, verified_ai_analysis
 
 COLOR_ENABLED = sys.stdout.isatty() and "NO_COLOR" not in os.environ
 RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -66,6 +62,18 @@ def loading(message="Initializing security modules"):
         print(f"\r{CYAN}{frame}{RESET} {message}...", end="", flush=True)
         time.sleep(0.04)
     print(f"\r{GREEN}✔{RESET} {message} ready.{' ' * 10}")
+
+
+def scan_animation():
+    if not sys.stdout.isatty():
+        return
+    width = 24
+    for frame in range(width * 2):
+        position = frame if frame < width else width * 2 - frame
+        bar = "─" * position + "●" + "─" * (width - position)
+        print(f"\r{CYAN}[{bar}]{RESET} {DIM}warming up telemetry{RESET}", end="", flush=True)
+        time.sleep(0.025)
+    print(f"\r{GREEN}[{'─' * (width + 1)}]{RESET} {GREEN}telemetry ready{RESET}")
 
 
 class Sentinel:
@@ -191,7 +199,13 @@ class Sentinel:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sentinel interactive security chatbot")
+    if len(sys.argv) > 1 and sys.argv[1] == "monitor":
+        detector_main(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "analyze":
+        analyst_main(sys.argv[2:])
+        return
+    parser = argparse.ArgumentParser(description="Sentinel terminal security monitor")
     parser.add_argument("--alert-file", default=os.path.expanduser("~/.sentinel_alerts.jsonl"))
     parser.add_argument("--database-file", default=os.path.expanduser("~/.sentinel.db"))
     args = parser.parse_args()
@@ -200,15 +214,11 @@ def main():
     watcher = threading.Thread(target=sentinel.watch, daemon=True)
     watcher.start()
     banner()
+    scan_animation()
     loading("Loading ML and alert engine")
     loading("Connecting local alert database")
     loading("Starting live event watcher")
     print(f"{GREEN}Sentinel is online{RESET}. Type {YELLOW}'help'{RESET} for commands.")
-    if COLOR_ENABLED:
-        print(
-            f"{DIM}Local read-only alert API: "
-            f"http://127.0.0.1:{os.environ.get('SENTINEL_API_PORT', '8000')}/api/health{RESET}"
-        )
     try:
         while sentinel.answer(input("sentinel> ")):
             pass
@@ -216,7 +226,6 @@ def main():
         print("\nSentinel stopped.")
     finally:
         sentinel.stop.set()
-
 
 if __name__ == "__main__":
     main()
