@@ -710,7 +710,7 @@ class Sentinel:
     def answer(self, command):
         command = command.strip()
         normalized = command.lower()
-        if normalized == "7" or normalized in {"quit", "exit", "q"}:
+        if normalized == "12" or normalized in {"quit", "exit", "q"}:
             return False
         menu_commands = {
             "1": "status",
@@ -719,6 +719,36 @@ class Sentinel:
             "5": "report",
             "6": "help",
         }
+        if normalized in {"7", "8", "9"}:
+            prompts = {
+                "7": ("Log file path: ", logs_main),
+                "8": ("Evidence directory: ", collect_main),
+                "9": ("File to hash: ", hash_main),
+            }
+            prompt, handler = prompts[normalized]
+            try:
+                path = _prompt_input(prompt).strip()
+            except (EOFError, KeyboardInterrupt):
+                path = ""
+            if path:
+                self._run_report_command(handler, [path])
+            else:
+                print("Action cancelled; no path was provided.")
+            return True
+        if normalized in {"10", "11"}:
+            action = "generate" if normalized == "10" else "check"
+            arguments = [action]
+            if action == "generate":
+                try:
+                    length = _prompt_input(
+                        "Password length (8-256, default 20): "
+                    ).strip()
+                except (EOFError, KeyboardInterrupt):
+                    length = ""
+                if length:
+                    arguments.extend(("--length", length))
+            self._run_cli_handler(password_main, arguments)
+            return True
         if normalized == "4":
             try:
                 query = _prompt_input("Google question: ").strip()
@@ -1038,7 +1068,12 @@ class Sentinel:
             ("4", "Search Google"),
             ("5", "Latest report"),
             ("6", "Help"),
-            ("7", "Quit"),
+            ("7", "Analyze a log file"),
+            ("8", "Collect evidence files"),
+            ("9", "Hash a file"),
+            ("10", "Generate a password"),
+            ("11", "Check password composition"),
+            ("12", "Quit"),
         )
         print(f"\n{BLUE}╭─ SENTINEL OPTIONS {'─' * 42}{RESET}")
         for number, label in options:
@@ -1066,7 +1101,7 @@ class Sentinel:
             ("status", "Show recorded incident and alert status"),
             ("menu", "Show numbered actions"),
             ("report", "Show the latest non-secret report"),
-            ("ask a question", "Search Google with citations after external-sharing consent"),
+            ("ask a question", "Chat with Gemini after external-sharing consent"),
             ("google QUESTION", "Search Google and show cited sources after consent"),
             ("alerts / recent", "Show evidence and recommended investigation steps"),
             ("explain", "Highlight the latest alert and explain recorded evidence"),
@@ -1075,6 +1110,10 @@ class Sentinel:
             ("hash FILE", "Calculate a SHA-2 digest without printing file contents"),
             ("password generate", "Generate a one-time, securely random password"),
             ("password check", "Check password composition without echoing it"),
+            ("7", "Menu: analyze a log file"),
+            ("8", "Menu: collect evidence metadata"),
+            ("9", "Menu: hash a file"),
+            ("10 / 11", "Menu: generate/check password securely"),
             ("help", "Show these commands"),
             ("quit", "Stop Sentinel and its monitor"),
         )
@@ -1261,7 +1300,10 @@ def main():
             state = "Sentinel is online"
         else:
             state = "Sentinel console is ready"
-        print(f"{GREEN}{state}{RESET}. Type {YELLOW}'help'{RESET} for commands.")
+        print(
+            f"{GREEN}{state}{RESET}. Select a numbered action or type a "
+            f"question / command. Type {YELLOW}'help'{RESET} for commands."
+        )
         print(
             f"{DIM}Chat naturally with Gemini after confirming. Ask for latest "
             "information or use 'google QUESTION' for Google Search; Sentinel "

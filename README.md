@@ -159,7 +159,12 @@ The startup menu also accepts numbered choices:
 | `4` | Search Google |
 | `5` | Show the latest report |
 | `6` | Help |
-| `7` | Quit |
+| `7` | Analyze a log file |
+| `8` | Collect evidence files from a directory |
+| `9` | Hash a file |
+| `10` | Generate a password |
+| `11` | Check password composition |
+| `12` | Quit |
 
 You can also type commands or ask questions directly:
 
@@ -172,7 +177,7 @@ You can also type commands or ask questions directly:
 | `collect DIRECTORY` | List evidence-file metadata; optionally save a report |
 | `hash FILE` | Print a SHA-2 digest without printing file contents |
 | `password generate` / `password check` | Generate or check a secret interactively |
-| `menu` | Show the numbered actions |
+| `menu` | Show the numbered navigation menu |
 | `report` | Show the latest non-secret report |
 | Natural-language message | Chat with Gemini after consent; current-info requests use Google Search |
 | `help` | Show commands |
@@ -187,8 +192,8 @@ show the newest alert using its recorded evidence.
 Interactive file analysis, hashing, explanations, and online answers ask before
 saving a report under `~/.sentinel/reports/`; decline to keep it on screen only.
 Generated passwords are never included in saved reports. The numbered menu
-replaces the feature dashboard; it does not clear the screen or show a report
-panel.
+launches the same log analysis, evidence collection, hashing, and password
+utilities available through text commands.
 
 ### NLP, RAG, analyst agent, and online LLM
 

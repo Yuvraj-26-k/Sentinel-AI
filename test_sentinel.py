@@ -1255,7 +1255,12 @@ class SentinelUiTests(unittest.TestCase):
                 self.assertIn("2  Recent alerts", rendered)
                 self.assertIn("3  Explain latest alert", rendered)
                 self.assertIn("4  Search Google", rendered)
-                self.assertIn("7  Quit", rendered)
+                self.assertIn("7  Analyze a log file", rendered)
+                self.assertIn("8  Collect evidence files", rendered)
+                self.assertIn("9  Hash a file", rendered)
+                self.assertIn("10  Generate a password", rendered)
+                self.assertIn("11  Check password composition", rendered)
+                self.assertIn("12  Quit", rendered)
                 self.assertNotIn("FEATURES", rendered)
                 self.assertNotIn("LATEST REPORT", rendered)
                 self.assertNotIn("Example saved-safe report", rendered)
@@ -1278,10 +1283,56 @@ class SentinelUiTests(unittest.TestCase):
                     self.assertTrue(terminal.answer("5"))
                     self.assertTrue(terminal.answer("6"))
                     self.assertTrue(terminal.answer("3"))
-                    self.assertFalse(terminal.answer("7"))
+                    self.assertFalse(terminal.answer("12"))
                 report.assert_called_once_with()
                 help_menu.assert_called_once_with()
                 explain.assert_called_once_with()
+            finally:
+                if terminal.store:
+                    terminal.store.engine.dispose()
+
+    def test_numbered_file_tools_prompt_for_path_and_use_existing_handlers(self):
+        cases = (
+            ("7", "logs_main", "sample.log", ["sample.log"]),
+            ("8", "collect_main", "evidence", ["evidence"]),
+            ("9", "hash_main", "capture.pcap", ["capture.pcap"]),
+        )
+        for choice, handler_name, value, expected_args in cases:
+            with self.subTest(choice=choice), tempfile.TemporaryDirectory() as directory:
+                terminal = Sentinel(
+                    str(Path(directory, "alerts.jsonl")),
+                    str(Path(directory, "alerts.db")),
+                )
+                try:
+                    with (
+                        patch(f"sentinel.{handler_name}") as handler,
+                        patch("builtins.input", return_value=value),
+                        patch.object(terminal, "_offer_save_report"),
+                    ):
+                        self.assertTrue(terminal.answer(choice))
+                    handler.assert_called_once_with(expected_args)
+                finally:
+                    if terminal.store:
+                        terminal.store.engine.dispose()
+
+    def test_numbered_password_tools_route_to_existing_secure_handler(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Sentinel(
+                str(Path(directory, "alerts.jsonl")),
+                str(Path(directory, "alerts.db")),
+            )
+            try:
+                with (
+                    patch("sentinel.password_main") as password_handler,
+                    patch("builtins.input", return_value="32"),
+                ):
+                    self.assertTrue(terminal.answer("10"))
+                    password_handler.assert_called_once_with(
+                        ["generate", "--length", "32"]
+                    )
+                    password_handler.reset_mock()
+                    self.assertTrue(terminal.answer("11"))
+                    password_handler.assert_called_once_with(["check"])
             finally:
                 if terminal.store:
                     terminal.store.engine.dispose()
