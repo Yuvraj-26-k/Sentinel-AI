@@ -1,5 +1,72 @@
 # Sentinel-AI
 
+## Nmap engine: OS detection and the full Nmap interface
+
+Install [Nmap](https://nmap.org/download.html) separately and put `nmap` on your
+PATH (on Windows include Npcap). Alternatively set `NMAP_PATH` to its executable
+or pass `--nmap-path PATH`. Sentinel invokes your installed Nmap; it does not
+bundle Nmap or Npcap. These commands need only Python and Nmap, with no Python
+monitoring dependencies:
+
+```sh
+# OS fingerprint estimates and service/version probes
+python -m sentinel nmap 127.0.0.1 -O -sV
+
+# UDP scan with service probes
+python -m sentinel nmap 127.0.0.1 -sU -sV -p 53,123,161
+
+# Discover hosts on YOUR authorized local subnet
+python -m sentinel nmap 192.168.1.0/24 -sn
+
+# All TCP ports, OS estimates, versions, traceroute, and a JSON report
+python -m sentinel nmap 127.0.0.1 -p 1-65535 -O -sV --traceroute -o full-scan.json
+
+# Explicitly select NSE scripts; none are enabled by Sentinel by default
+python -m sentinel nmap 127.0.0.1 -sV --script ssh-hostkey -p 22
+
+# Additional Nmap flags go after --
+python -m sentinel nmap 127.0.0.1 -sV -- --version-light --reason
+
+# Complete native Nmap interface, including Nmap's own output formats
+python -m sentinel nmap --native -- -O -sV -p 22,80,443 -oN native.txt 127.0.0.1
+
+# Equivalent engine selection through the scan command
+python -m sentinel scan --engine nmap 127.0.0.1 -O -sV
+```
+
+Structured mode supports OS detection, service versions, TCP SYN/connect, UDP,
+host discovery, IPv6, traceroute, explicit NSE scripts, timing templates, port
+selection, multiple targets, and CIDR ranges. Extra arguments after `--` are
+passed directly to Nmap. Native mode exposes the installed Nmap's complete
+interface with unchanged console output and exit status; Sentinel JSON and AI
+processing are unavailable in that mode. Nmap may itself enable scripts when
+you explicitly pass flags such as `-A` or `-sC`.
+
+OS detection, SYN/UDP scans, and traceroute may require administrator/root
+privileges and a working packet-capture driver. Sentinel never escalates itself.
+Use an appropriately privileged terminal when needed. OS matches are estimates,
+not guarantees, and can fail when fingerprinting conditions are unsuitable.
+No OS is fabricated when Nmap cannot identify it. UDP can report ambiguous
+`open|filtered`; Sentinel preserves Nmap's exact port states.
+
+Structured JSON includes service attributes, CPE identifiers, OS match accuracy,
+host status/addresses, nested NSE results, traceroute, run statistics, grouped
+port states, Nmap warnings, and the original XML so no report fields are lost.
+Nmap often groups uninteresting ports instead of listing every port individually.
+`--open-only` filters the terminal table only. Use `--json` to print JSON or
+`-o FILE` to create a report without overwriting. Nmap's own `-oX`, `-oA`, other
+output flags and `--resume` require native mode because structured mode owns XML
+output. Scans can take substantial time; Ctrl+C interrupts the scan.
+
+Add `--ai` to a structured scan for an optional Gemini explanation. This sends
+the structured report, including addresses, service versions and script output,
+to Google; keep it off for local-only operation. Set `GEMINI_API_KEY` first.
+AI text cannot improve measurement accuracy and must be verified.
+
+Reference: [Nmap manual](https://nmap.org/book/man.html) and
+[Nmap XML interface](https://nmap.org/book/output-formats-xml-output.html).
+Run tests with `python -m unittest -v test_scanner.py test_nmap_backend.py`.
+
 **Simple TCP port scanning with local guidance and optional AI explanations.**
 
 ## Quick start: scan ports
@@ -46,9 +113,10 @@ API failure leaves the measured scan and local guidance available. Never commit
 API keys. After installing the full package, `sentinel scan` and the dedicated
 `sentinel-scan` entry point are also available.
 
-This is a beginner-friendly TCP connect scanner, not a full replacement for
-Nmap. It does not implement UDP/SYN scans, OS fingerprinting, version detection,
-or vulnerability verification. Existing monitoring features remain below.
+The basic engine is a beginner-friendly TCP connect scanner. Use the Nmap engine
+above for UDP/SYN scans, OS fingerprinting, and service version detection.
+Neither engine treats open ports or version matches as verified vulnerabilities.
+Existing monitoring features remain below.
 
 Validate the scanner with `python -m unittest -v test_scanner.py`.
 

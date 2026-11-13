@@ -20,6 +20,10 @@ if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "scan":
     from scanner import main as scan_main
     raise SystemExit(scan_main(sys.argv[2:]))
 
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "nmap":
+    from nmap_backend import main as nmap_main
+    raise SystemExit(nmap_main(sys.argv[2:]))
+
 import threading
 import time
 import textwrap
@@ -616,6 +620,7 @@ def _relay_monitor_output(process, stop_event):
 
 
 def _show_cli_help():
+    print("sentinel nmap HOST [-O] [-sV] [-sU] [--script NAME]  Use the Nmap engine")
     print("sentinel scan HOST [-p 22,80,443] [--json] [--ai]  Check TCP ports")
     print(
         f"\n{BLUE}╭─ SENTINEL SECURITY MONITOR {'─' * 34}{RESET}\n"
@@ -1361,6 +1366,9 @@ class Sentinel:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "nmap":
+        from nmap_backend import main as nmap_main
+        return nmap_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "scan":
         from scanner import main as scan_main
         return scan_main(sys.argv[2:])
