@@ -1,3 +1,7 @@
+![Sentinel-AI — Scan. Understand. Defend.](assets/sentinel-banner.svg)
+
+[Quick start](#scan-and-summarize) · [AI summaries](#ai-summary) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
 # Sentinel-AI
 
 **An independent TCP scanner with plain-language results and optional AI summaries.**
@@ -477,9 +481,16 @@ history at `~/.nmap_ai_baseline.json`. Override paths with the monitor's
 
 ## Project layout
 
-The repository has eight tracked project files: four cohesive runtime modules,
-one consolidated test file, this guide, the package/install configuration, and
-`.gitignore`.
+| File | Purpose |
+| --- | --- |
+| `scanner.py` | Independent TCP scanning, service evidence and AI summaries |
+| `sentinel.py` | CLI dispatch and interactive security console |
+| `detection.py` | Scan detection and behavioral anomaly scoring |
+| `telemetry.py` | Platform event adapters and incident persistence |
+| `analyst.py` | Local guidance and optional cloud-assisted analysis |
+| `test_scanner.py`, `test_native_features.py` | Scanner and AI-summary tests |
+| `test_sentinel.py` | Monitoring, persistence and console regression tests |
+| `CONTRIBUTING.md`, `SECURITY.md` | Development and responsible reporting |
 
 ## Tests
 

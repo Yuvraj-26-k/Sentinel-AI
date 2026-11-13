@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="300" viewBox="0 0 1280 300" role="img" aria-labelledby="title desc">
+  <title id="title">Sentinel-AI — Scan. Understand. Defend.</title>
+  <desc id="desc">Independent Python TCP scanning, service evidence and optional AI summaries.</desc>
+  <rect width="1280" height="300" rx="20" fill="#0b1523"/>
+  <g fill="none" stroke="#1d3c4e"><circle cx="1080" cy="150" r="116"/><circle cx="1080" cy="150" r="80"/><circle cx="1080" cy="150" r="44"/><path d="M940 150h280M1080 10v280"/></g>
+  <path d="M1080 150 1155 75" stroke="#69e5bd" stroke-width="3"/>
+  <circle cx="1130" cy="100" r="6" fill="#69e5bd"/>
+  <rect x="64" y="62" width="5" height="172" fill="#69e5bd" rx="2"/>
+  <text x="94" y="98" fill="#69e5bd" font-family="monospace" font-size="17" letter-spacing="3">SCAN. UNDERSTAND. DEFEND.</text>
+  <text x="90" y="169" fill="#f1f6fa" font-family="Segoe UI,Arial,sans-serif" font-size="64" font-weight="700">Sentinel-AI</text>
+  <text x="94" y="217" fill="#bdcfdb" font-family="Segoe UI,Arial,sans-serif" font-size="23">Independent TCP scanning. Evidence first. AI explained.</text>
+</svg>
