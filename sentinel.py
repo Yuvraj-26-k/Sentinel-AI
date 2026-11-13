@@ -14,6 +14,12 @@ import stat
 import string
 import subprocess
 import sys
+
+# Keep the basic scanner usable without the monitoring/ML dependencies.
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "scan":
+    from scanner import main as scan_main
+    raise SystemExit(scan_main(sys.argv[2:]))
+
 import threading
 import time
 import textwrap
@@ -610,6 +616,7 @@ def _relay_monitor_output(process, stop_event):
 
 
 def _show_cli_help():
+    print("sentinel scan HOST [-p 22,80,443] [--json] [--ai]  Check TCP ports")
     print(
         f"\n{BLUE}╭─ SENTINEL SECURITY MONITOR {'─' * 34}{RESET}\n"
         f"{BLUE}│{RESET} {CYAN}sentinel{RESET}                         "
@@ -1354,6 +1361,9 @@ class Sentinel:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "scan":
+        from scanner import main as scan_main
+        return scan_main(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] in {"help", "-h", "--help"}:
         _show_cli_help()
         return 0
