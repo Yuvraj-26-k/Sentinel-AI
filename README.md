@@ -1,506 +1,87 @@
 ![Sentinel-AI — Scan. Understand. Defend.](assets/sentinel-banner.svg)
 
-[Quick start](#scan-and-summarize) · [AI summaries](#ai-summary) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
-
 # Sentinel-AI
 
-**An independent TCP scanner with plain-language results and optional AI summaries.**
+**Independent TCP scanning, network monitoring, and optional AI explanations.**
 
-Sentinel scans using its own Python socket engine. It does not invoke Nmap,
-require Nmap/Npcap, or need administrator privileges for TCP scanning. Python
-3.10+ is enough to run the scanner without installing the monitoring package.
+Sentinel is a Python security-learning project for checking port exposure and
+reviewing network-event evidence. Scanning uses its own socket engine; Nmap and
+administrator privileges are not required for the TCP scanner.
 
-## Scan and summarize
+[Scanner quick start](#quick-start) · [Monitoring reference](docs/MONITORING.md) ·
+[Architecture](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
+## Quick start
+
+Python 3.10+; the scanner requires no third-party Python packages.
 
 ```sh
+git clone https://github.com/Yuvraj-26-k/Sentinel-AI.git
+cd Sentinel-AI
 python -m sentinel scan 127.0.0.1 -p 22,80,443
-python -m sentinel scan 127.0.0.1 -p 1-1024 --services --os
-python -m sentinel scan 127.0.0.1 -p 22,80,443 --services --ai
-python -m sentinel scan 127.0.0.1 -p 1-65535 --open-only -o scan.json
+python -m sentinel scan 127.0.0.1 -p 22,80,443 --services --os
+python -m sentinel scan 127.0.0.1 -p 1-1024 --open-only --output scan.json
 ```
 
-Only scan systems you own or have permission to test. One invocation scans one
-hostname or IP, using the first address returned by DNS. IPv4 and IPv6 work.
-Omit `-p` to check 28 common ports. Use comma-separated ports, ranges, or both.
+Use only systems you own or have permission to test. A scan targets one IP or
+hostname and uses the first resolved address; IPv4 and IPv6 are supported.
+Omit `-p` to check 28 common ports. JSON reports retain every scanned port and
+refuse to overwrite existing files.
 
-Results distinguish accepted connections (`open`), refused connections (`closed`),
-timeouts (`filtered`, uncertain), unreachable routes and local socket errors.
-Timeouts do not prove filtering. `--retries 1` retries timed-out connections
-once by default; set 0-3. `--timeout 3` changes the per-operation timeout in
-seconds. `--workers 64` controls concurrency (1-256). Both active threads and
-queued probes are bounded, including when scanning all 65,535 TCP ports.
+## What the scanner reports
 
-Every scan includes a local factual summary and defensive guidance. This local
-summary is deterministic, not AI. `--services` additionally opens a connection
-to each open port, reads up to 4 KiB of banner data, sends an HTTP HEAD request
-on common web ports, and performs TLS handshakes on common TLS ports. It never
-follows web redirects, authenticates, or executes remote content. Banner-less
-services may remain unidentified. These probes can be logged by the target.
+| Result | Evidence and limits |
+| --- | --- |
+| `open` | A TCP connection succeeded; this alone is not a vulnerability |
+| `closed` | The connection was refused |
+| `filtered` | Timeout after configured retries; filtering is uncertain |
+| `unreachable` / `error` | Routing or local socket failure; port state remains undetermined |
+| Service hint | Port-database guess, separate from observed evidence |
+| `--services` | Bounded banners, common-port HTTP HEAD responses and TLS handshakes |
+| `--os` | Low-confidence banner clues; not remote OS fingerprinting |
 
-Service hints come from the local port database and are guesses. Observed SSH
-identifiers, HTTP headers and negotiated TLS versions/ciphers are stored
-separately as evidence. TLS inspection does not validate certificates and does
-not claim they are trusted. Banners can be misleading or intentionally spoofed.
+Timeouts can reflect loss or slow replies. Banners can be spoofed or belong to a
+proxy/container. TLS inspection records negotiation details without validating
+certificate trust. No UDP/SYN scanning, traceroute or vulnerability verification
+is implemented. No superior-to-Nmap accuracy or speed claim is made.
 
-`--os` enables service inspection and reports low-confidence OS clues such as
-an Ubuntu or Microsoft IIS banner. These may describe a proxy or container;
-they are not remote OS fingerprinting. Without evidence, OS remains `unknown`.
-This version does not implement UDP/SYN scanning, traceroute, NSE scripts or
-Nmap-level OS fingerprints. There is no claim of superior scanning accuracy
-or performance; its focus is independent operation and understandable results.
+Use `--workers 16 --timeout 3 --retries 1` to adjust concurrency and timeouts;
+run `python -m sentinel scan --help` for all options.
 
-## AI summary
+## Optional AI summary
 
-Set `GEMINI_API_KEY` in your environment and add `--ai`:
+Set `GEMINI_API_KEY` in your environment, then explicitly request an explanation:
 
 ```sh
-python -m sentinel scan 127.0.0.1 -p 22,80,443 --services --os --ai
+python -m sentinel scan 127.0.0.1 -p 22,80,443 --services --ai
 ```
 
-The default model is `gemini-3.8-flash`. Override `GEMINI_MODEL` with a supported
-model available to your account. Never commit API keys. With `--ai`, Sentinel
-sends the target, address, aggregate counts, local summary, OS clues and up to
-200 open-port records (including collected banners) to Google's Gemini API.
-Without `--ai`, no scan data goes to an AI provider. The report explicitly says
-when open-port records were omitted from AI input. AI only explains results;
-it does not choose targets, run scans or change measured port states.
+`--ai` sends the target/address, summary, counts and up to 200 open-port records
+(including collected banners and OS clues) to Google's Gemini API. Omit it for
+local-only scans. The default configured model is `gemini-3.8-flash`; override
+`GEMINI_MODEL` with a supported model available to your account. Live API
+availability requires your own key and has not been verified by the docs check.
+AI text is unverified and cannot change measured port states. API failure leaves
+the local scan and factual summary available. Never commit credentials.
 
-AI is asked to explain observations, uncertainties and defensive next steps
-without inventing vulnerabilities or an operating system. Text from remote
-services is treated as untrusted data. Model output remains unverified. If the
-API fails or returns no usable text, scan results and the local summary remain
-available. The live API requires your own configured key and provider access.
+## Monitoring and console
 
-Use `--json` for machine-readable stdout or `-o FILE` to create a JSON report;
-existing files are never overwritten. `--open-only` hides table rows but keeps
-every scanned port in JSON. After full package installation, `sentinel scan`
-and `sentinel-scan` are available as command-line entry points.
+The optional monitoring stack normalizes supported firewall/Sysmon/Suricata/Zeek
+events, detects possible scans, scores unusual behavior and stores incidents.
+It needs additional dependencies and platform-specific log access. Follow the
+[full monitoring reference](docs/MONITORING.md), including installation and
+permissions. Neither a heuristic nor an anomaly score proves an attack.
+
+## Validation and project status
 
 ```sh
 python -m unittest -v test_scanner.py test_native_features.py
 ```
 
-The existing optional monitoring and alert tools are documented below.
-
-
-**Local-first network security monitoring in your terminal.** Sentinel-AI
-normalizes firewall and network-sensor logs, detects possible scans, scores
-unusual behavior, and keeps an evidence-backed incident history. It runs on
-Linux, Windows, and macOS, with optional Suricata and Zeek input.
-
-Sentinel is a defensive monitoring tool—not an intrusion-prevention system. It
-does not block traffic, change firewall rules, or claim that an alert proves
-an attack.
-
-## Features
-
-- **One event format:** UFW, Windows Filtering Platform and Firewall, Sysmon,
-  macOS unified logs, Suricata EVE JSON, and Zeek connection logs.
-- **Useful scan rules:** configurable vertical, horizontal, slow, SYN, and
-  connection-failure detection when the source provides the necessary signals.
-- **Local anomaly scoring:** an Isolation Forest scores event volume, port and
-  destination diversity, rate, timing, and active duration after it has enough
-  normal history. Scores are not probabilities or proof of malicious activity.
-- **Incident history:** SQLite storage, duplicate-event handling, incident
-  aggregation, event timelines, source health, and restart recovery.
-- **Evidence-grounded analysis:** local triage guidance and optional Gemini
-  analysis can only surface alert evidence and approved investigation steps.
-- **Conversational assistant:** ordinary messages and questions go to Gemini
-  chat after consent. Requests for current information or `google QUESTION`
-  use Google Search grounding and return citations when available. Chat requires
-  a Gemini API key; Google Search uses browser-based Google OAuth.
-- **Opt-in file utilities:** coarse analysis of one local text log and
-  non-recursive metadata collection for selected evidence-file extensions,
-  plus streaming SHA-2 file hashing.
-- **Intent-aware terminal assistant:** routes familiar requests to local log,
-  evidence, hashing, and alert tools, and explains Sentinel's behavioral
-  detection scope without presenting it as general AI knowledge.
-- **NLP + RAG analyst agent:** normalizes common wording and inflections to
-  Sentinel intents, retrieves relevant local security guidance, and joins
-  retrieved context with alert analysis while keeping guidance distinct from
-  incident evidence.
-- **Optional LLM:** Gemini can perform consent-gated web research with Google
-  Search citations and evidence-constrained alert assistance. It is not a
-  guaranteed source of truth; local detection and retrieval work without it.
-- **Animated terminal experience:** colored startup banner, scanning progress
-  animation, live incident output, and animated, colored prompts that also color
-  typed commands. Prompt animation and colors are disabled in non-interactive
-  output; `NO_COLOR` disables color.
-- **CLI-only interface:** inspect live alerts and incidents directly in the
-  terminal; no web server or dashboard is installed.
-
-## Requirements
-
-- Python 3.10 or newer
-- Internet access for the initial dependency installation
-- Permission to read the selected firewall or sensor log
-- Optional: `GEMINI_API_KEY` for consent-gated Gemini chat and alert explanations
-- Optional: Google Cloud Desktop OAuth client JSON for browser-authenticated search
-
-## Installation
-
-Clone the repository and enter its directory:
-
-```sh
-git clone https://github.com/Yuvraj-26-k/Sentinel-AI.git
-cd Sentinel-AI
-```
-
-On Linux, enter the cloned repository and start Sentinel with its repo-local
-launcher:
-
-### Linux
-
-```sh
-./sentinel
-```
-
-This one command creates `.venv` if needed, installs or refreshes dependencies,
-and starts the bot; manual environment activation is not required. It does not
-fetch Git updates or run system package commands. After pulling source updates,
-run `./sentinel` again. The first interactive launch opens the feature
-dashboard and latest-report panel. Linux shells do not search the current
-directory for commands by default, so use `./sentinel`; typing bare `sentinel`
-requires adding a launcher to `PATH`.
-
-On first launch with the default UFW source, Sentinel checks whether UFW and
-its log are available. If UFW is missing, it offers to install it using the
-detected system package manager; if logging appears disabled, it separately
-asks whether to run `sudo ufw logging on`. Both actions require your explicit
-confirmation. Sentinel never enables the firewall or changes firewall rules.
-If you decline setup, it opens the console without live monitoring and tells
-you how to select another installed source.
-
-Make sure your account can read `/var/log/ufw.log`; Sentinel does not run the
-monitor as root. On systems with ACL support, you can grant read access with:
-
-```sh
-sudo setfacl -m "u:$USER:r" /var/log/ufw.log
-```
-
-### macOS
-
-```sh
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
-```
-
-The default source streams macOS unified logs with the built-in `log` utility.
-Some records omit network endpoints; those records cannot be used for port
-scan detection.
-
-### Windows PowerShell
-
-Install Python 3.10 or newer, then run:
-
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e .
-```
-
-The default source reads Windows Filtering Platform Security events. To
-collect connection events, enable the Windows audit subcategory from an
-elevated PowerShell prompt:
-
-```powershell
-auditpol /set /subcategory:"Filtering Platform Connection" /success:enable /failure:enable
-```
-
-The account running Sentinel also needs permission to read the Security event
-log. Sysmon network-connect events are included when Sysmon is already
-installed and accessible; Sysmon is optional.
-
-## Run Sentinel
-
-After installing the project for your platform, start the monitor and live
-alert console with one command:
-
-```sh
-sentinel
-```
-
-On Linux, run `./sentinel` from the repository. On macOS and Windows,
-activate the virtual environment from the installation steps; in Windows
-PowerShell, if script activation is restricted, run
-`.\.venv\Scripts\sentinel.exe`. The automatic monitor uses
-the platform's default source: UFW on Linux, Windows Filtering Platform on
-Windows, and unified logs on macOS. One `Ctrl+C` or `quit` stops the console
-and its monitor. Use `sentinel --no-monitor` to open only the console.
-Use `sentinel --no-animation` to skip the startup progress effects while
-keeping the banner and interactive console.
-
-The main navigation menu shows each action on the left and a description of
-what it does in a panel on the right. After choosing an option, the right panel
-highlights that action before it runs. The main menu offers:
-
-| Number | Action |
-| --- | --- |
-| `1` | Status |
-| `2` | Recent alerts |
-| `3` | Explain the latest alert |
-| `4` | Search Google |
-| `5` | Show the latest report |
-| `6` | Open Tools submenu |
-| `7` | Help |
-| `8` | Exit |
-
-The **Tools** submenu contains log analysis, evidence collection, file hashing,
-and a nested password-tools menu. Each tool has navigation to go back to its
-parent menu, return to the main menu, or exit Sentinel. The password submenu
-also has explicit Back and Exit options. Tool and password menus use the same
-right-side action descriptions.
-
-You can also type commands or ask questions directly:
-
-| Command | What it does |
-| --- | --- |
-| `status` | Show recent alerts |
-| `alerts` / `recent` | List recent incidents |
-| `explain` | Show evidence and safe investigation steps |
-| `logs PATH` | Analyze one log file; optionally add `--output REPORT` |
-| `collect DIRECTORY` | List evidence-file metadata; optionally save a report |
-| `hash FILE` | Print a SHA-2 digest without printing file contents |
-| `password generate` / `password check` | Generate or check a secret interactively |
-| `menu` | Show the numbered navigation menu |
-| `report` | Show the latest non-secret report |
-| Natural-language message | Chat with Gemini after consent; current-info requests use Google Search |
-| `help` | Show commands |
-| `quit` | Exit the console |
-
-File-tool commands can also be run directly as `sentinel logs ...`,
-`sentinel collect ...`, and `sentinel hash ...`. In the console, natural
-requests such as `analyze logs "path with spaces"` and `collect evidence
-"directory"` route to these same local commands. `analyze alert` and `explain`
-show the newest alert using its recorded evidence.
-
-Interactive file analysis, hashing, explanations, and online answers ask before
-saving a report under `~/.sentinel/reports/`; decline to keep it on screen only.
-Generated passwords are never included in saved reports. The navigation menus
-launch the same log analysis, evidence collection, hashing, and password
-utilities available through text commands.
-
-### NLP, RAG, analyst agent, and online LLM
-
-Explicit console commands are handled locally; other messages are treated as
-conversation instead of being guessed into a command from keywords. With
-`GEMINI_API_KEY`, normal messages and questions go to Gemini chat and continue
-with follow-ups; a bounded recent conversation is held in memory for the current
-console. Requests for up-to-date information and `google QUESTION` use Google
-Search grounding with browser-based OAuth. Relevant chat requests can retrieve
-from a small local security knowledge base (built-in triage notes plus optional
-Markdown files in `knowledge/`) and supply those excerpts as context.
-The bounded analyst agent combines retrieved guidance with the recorded alert's
-deterministic evidence analysis; retrieved text is marked as guidance, never
-incident evidence. Without an API key, matching local guidance is displayed
-instead of a generated chat answer; browser OAuth for Google Search is a
-separate sign-in flow.
-
-Set `GEMINI_API_KEY` to enable consent-gated Gemini chat and alert explanations.
-Chat asks before sending the message, up to eight recent chat turns, and relevant
-retrieved guidance. Chat history stays in memory for the current console only.
-Sentinel does not attach local logs or alerts to normal chat.
-
-Google Search uses a Google Cloud Desktop OAuth client instead of an API key.
-In Google Cloud Console, enable the Generative Language API, configure the
-OAuth consent screen (add your Google account as a test user if the app is in
-testing), create a Desktop app OAuth client, and download its JSON.
-Place it at `~/.sentinel/google-oauth-client.json`, or set
-`GEMINI_OAUTH_CLIENT_FILE` to its path. The client JSON must include its Cloud
-project ID; alternatively, set `GEMINI_OAUTH_PROJECT_ID`. Use `google QUESTION`
-or choose **4** in the menu. After you approve sending the query, Sentinel
-opens your browser for Google sign-in on first use. It saves the refresh token
-under `~/.sentinel/google-oauth-token.json` with owner-only permissions on
-Unix-like systems and refreshes it for later searches. Remove that token file
-to sign out. Searches ask before transmitting the query and do not attach alert
-or log contents. Citations are shown when available; answers can be incomplete
-or incorrect. Google controls API availability, quotas, and charges.
-
-For example, on Linux/macOS:
-
-```sh
-export GEMINI_OAUTH_CLIENT_FILE="$HOME/path/to/google-oauth-client.json"
-```
-
-In PowerShell:
-
-```powershell
-$env:GEMINI_OAUTH_CLIENT_FILE = "C:\path\to\google-oauth-client.json"
-```
-
-The browser-based sign-in is cached securely for later menu selections and
-refreshed as needed.
-`explain` separately asks before sending alert telemetry to Gemini for evidence
-selection. Answers can be wrong or incomplete; verify important information
-with primary sources. There is no 100% accuracy guarantee. Without a key, local
-detection, intent routing, and RAG continue to work offline.
-
-### Analyze logs and collect evidence files
-
-The standalone utilities do not start the monitor or interactive console.
-Analyze a single local text log and optionally save the report:
-
-```sh
-sentinel logs /path/to/application.log
-sentinel logs /path/to/application.log --output /path/to/log-report.txt
-```
-
-The report includes byte, line, word, and character totals; case-sensitive
-substring counts for `INFO`, `WARNING`, and `ERROR`; unique email candidates;
-and unique IP addresses validated with Python's `ipaddress` module. Invalid IP
-candidates are omitted. Input is decoded as UTF-8 with invalid byte sequences
-replaced. These are coarse, file-level indicators and statistics—not
-normalized network telemetry, traffic analysis, or proof of malicious activity.
-The command reads only the file explicitly named.
-
-Collect metadata from matching regular files in one directory, without
-descending into subdirectories:
-
-```sh
-sentinel collect /path/to/evidence
-sentinel collect /path/to/evidence --output /path/to/evidence-report.txt
-```
-
-The collector includes only case-sensitive `.txt`, `.log`, `.pdf`, `.docx`,
-`.exe`, `.bat`, and `.ps1` extensions, and reports each filename, extension,
-size, and absolute path. A new report destination is written after scanning,
-so it is not included in that scan. An existing matching file in the scanned
-directory is never overwritten as a report destination. Inaccessible entries
-are reported and cause a non-zero exit status; report write failures are
-reported as errors.
-
-These utilities adapt only the useful behaviors identified from shallow
-inspection of the source tool repositories; they are not full ports of those
-projects. They do not recurse, execute files, inspect document contents, or
-send data to a service. Use `python -m sentinel logs ...` and
-`python -m sentinel collect ...` as equivalents when invoking from a source
-checkout.
-
-### Hash files and handle passwords safely
-
-Hash one file with SHA-256 (the default) or another allow-listed SHA-2
-algorithm:
-
-```sh
-sentinel hash /path/to/evidence.bin
-sentinel hash /path/to/evidence.bin --algorithm sha512
-sentinel hash /path/to/evidence.bin --output /path/to/digest-report.txt
-```
-
-Files are read in chunks. Only the path, algorithm, and digest are shown; file
-contents are never printed or persisted. A digest report is strictly
-create-only: an existing output path is rejected, and the source file cannot
-be used as the output path.
-
-Password tools are opt-in and require an interactive terminal:
-
-```sh
-sentinel password generate --length 24
-sentinel password check
-```
-
-Generation uses Python's `secrets` module and accepts lengths from 8 through
-256 (default 20). The generated secret is shown once in the terminal and is
-never saved; generation refuses redirected/non-interactive output. The checker
-uses hidden input and reports only a simple composition heuristic (minimum
-length, lowercase, uppercase, digit, and symbol), not entropy or a guarantee
-of password strength. Password text is not logged, saved, or sent to Gemini.
-
-For source-checkout invocation, the equivalents are
-`python -m sentinel hash ...` and `python -m sentinel password ...`.
-
-The baseline and source status are saved when Sentinel stops. Animation is
-shown only in a terminal and can be disabled by redirecting output. Set
-`NO_COLOR=1` to disable colors.
-
-### Select a source
-
-Pass a source to the monitor. File-based sources start at the current end of
-the file and follow new records:
-
-```sh
-sentinel --source ufw
-sentinel --source windows-firewall --log-file "C:\Windows\System32\LogFiles\Firewall\pfirewall.log"
-sentinel --source suricata --log-file /var/log/suricata/eve.json
-sentinel --source zeek --log-file /usr/local/zeek/logs/current/conn.log
-```
-
-Supported sources are `auto`, `ufw`, `windows-firewall`, `windows-native`,
-`macos-unified`, `suricata`, and `zeek`. UFW is the default Linux source;
-Windows Firewall W3C files and the native Windows event stream are separate
-options. Suricata consumes EVE JSON and Zeek consumes `conn.log` TSV.
-
-Additional thresholds can be configured, for example:
-
-```sh
-sentinel --source auto --scan-window-seconds 60 --vertical-ports 15 --horizontal-hosts 10 --slow-window-seconds 900
-```
-
-Run `sentinel --help` to see console options or
-`python -m sentinel monitor --help` for all thresholds and data-file options.
-Events without a destination port are retained where supported but
-cannot contribute to port-scan detection.
-
-### Optional local analysis and Gemini
-
-Run a local example analysis or search the built-in triage guidance:
-
-```sh
-python -m sentinel analyze --source 192.0.2.10 --events 20 --unique-ports 18 --duration 10
-python -m sentinel analyze --query "correlate firewall events"
-```
-
-The Isolation Forest is a behavioral anomaly scorer over recorded network
-event features after sufficient normal history; it is not a general-purpose
-language model or source of broad factual knowledge. To enable optional Gemini
-explanations, set `GEMINI_API_KEY` and optionally
-`GEMINI_MODEL`. Gemini receives the selected alert context; its free-form
-claims are not shown. Sentinel validates proposed evidence against the alert
-and restricts investigation steps to an allow-list. Without a key, local
-evidence-bound analysis still works.
-
-## Detection and data
-
-Vertical scans are grouped by source and destination. Horizontal detection
-looks for a source probing many hosts on a small set of ports. Slow, SYN, and
-connection-failure patterns are only classified when configured thresholds
-are met and telemetry supports the distinction. Otherwise Sentinel reports a
-**possible scan**.
-
-The Isolation Forest is unsupervised and requires at least 30 normal feature
-samples per source before scoring. Its raw decision score is not a probability.
-Suspicious windows are excluded from normal training samples.
-
-By default, Sentinel stores its SQLite event and incident database at
-`~/.sentinel.db`, alert JSON Lines at `~/.sentinel_alerts.jsonl`, and model
-history at `~/.nmap_ai_baseline.json`. Override paths with the monitor's
-`--database-file`, `--alert-file`, and `--model-file` options.
-
-## Project layout
-
-| File | Purpose |
-| --- | --- |
-| `scanner.py` | Independent TCP scanning, service evidence and AI summaries |
-| `sentinel.py` | CLI dispatch and interactive security console |
-| `detection.py` | Scan detection and behavioral anomaly scoring |
-| `telemetry.py` | Platform event adapters and incident persistence |
-| `analyst.py` | Local guidance and optional cloud-assisted analysis |
-| `test_scanner.py`, `test_native_features.py` | Scanner and AI-summary tests |
-| `test_sentinel.py` | Monitoring, persistence and console regression tests |
-| `CONTRIBUTING.md`, `SECURITY.md` | Development and responsible reporting |
-
-## Tests
-
-Run the full regression suite:
-
-```sh
-python -m unittest -v test_sentinel
-```
-
-The tests cover platform adapters, detection, anomaly scoring, incident
-persistence, rotation, CLI behavior, and evidence validation. They cannot
-verify operating-system audit settings, real firewall behavior, permissions,
-or production incident response.
+These tests use loopback listeners and mocked AI requests; they do not validate
+a live AI account or production network. Monitoring tests require installing
+the package and running `python -m unittest -v test_sentinel.py`; see the
+reference and contribution guide. No CI or production-readiness guarantee is
+claimed. Main modules: `scanner.py`, `sentinel.py`, `telemetry.py`, `detection.py`
+and `analyst.py`. Next priorities are reproducible examples, cross-platform CI
+and keeping the scanner/monitor scopes clear.
