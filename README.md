@@ -1,124 +1,83 @@
 # Sentinel-AI
 
-## Nmap engine: OS detection and the full Nmap interface
+**An independent TCP scanner with plain-language results and optional AI summaries.**
 
-Install [Nmap](https://nmap.org/download.html) separately and put `nmap` on your
-PATH (on Windows include Npcap). Alternatively set `NMAP_PATH` to its executable
-or pass `--nmap-path PATH`. Sentinel invokes your installed Nmap; it does not
-bundle Nmap or Npcap. These commands need only Python and Nmap, with no Python
-monitoring dependencies:
+Sentinel scans using its own Python socket engine. It does not invoke Nmap,
+require Nmap/Npcap, or need administrator privileges for TCP scanning. Python
+3.10+ is enough to run the scanner without installing the monitoring package.
 
-```sh
-# OS fingerprint estimates and service/version probes
-python -m sentinel nmap 127.0.0.1 -O -sV
-
-# UDP scan with service probes
-python -m sentinel nmap 127.0.0.1 -sU -sV -p 53,123,161
-
-# Discover hosts on YOUR authorized local subnet
-python -m sentinel nmap 192.168.1.0/24 -sn
-
-# All TCP ports, OS estimates, versions, traceroute, and a JSON report
-python -m sentinel nmap 127.0.0.1 -p 1-65535 -O -sV --traceroute -o full-scan.json
-
-# Explicitly select NSE scripts; none are enabled by Sentinel by default
-python -m sentinel nmap 127.0.0.1 -sV --script ssh-hostkey -p 22
-
-# Additional Nmap flags go after --
-python -m sentinel nmap 127.0.0.1 -sV -- --version-light --reason
-
-# Complete native Nmap interface, including Nmap's own output formats
-python -m sentinel nmap --native -- -O -sV -p 22,80,443 -oN native.txt 127.0.0.1
-
-# Equivalent engine selection through the scan command
-python -m sentinel scan --engine nmap 127.0.0.1 -O -sV
-```
-
-Structured mode supports OS detection, service versions, TCP SYN/connect, UDP,
-host discovery, IPv6, traceroute, explicit NSE scripts, timing templates, port
-selection, multiple targets, and CIDR ranges. Extra arguments after `--` are
-passed directly to Nmap. Native mode exposes the installed Nmap's complete
-interface with unchanged console output and exit status; Sentinel JSON and AI
-processing are unavailable in that mode. Nmap may itself enable scripts when
-you explicitly pass flags such as `-A` or `-sC`.
-
-OS detection, SYN/UDP scans, and traceroute may require administrator/root
-privileges and a working packet-capture driver. Sentinel never escalates itself.
-Use an appropriately privileged terminal when needed. OS matches are estimates,
-not guarantees, and can fail when fingerprinting conditions are unsuitable.
-No OS is fabricated when Nmap cannot identify it. UDP can report ambiguous
-`open|filtered`; Sentinel preserves Nmap's exact port states.
-
-Structured JSON includes service attributes, CPE identifiers, OS match accuracy,
-host status/addresses, nested NSE results, traceroute, run statistics, grouped
-port states, Nmap warnings, and the original XML so no report fields are lost.
-Nmap often groups uninteresting ports instead of listing every port individually.
-`--open-only` filters the terminal table only. Use `--json` to print JSON or
-`-o FILE` to create a report without overwriting. Nmap's own `-oX`, `-oA`, other
-output flags and `--resume` require native mode because structured mode owns XML
-output. Scans can take substantial time; Ctrl+C interrupts the scan.
-
-Add `--ai` to a structured scan for an optional Gemini explanation. This sends
-the structured report, including addresses, service versions and script output,
-to Google; keep it off for local-only operation. Set `GEMINI_API_KEY` first.
-AI text cannot improve measurement accuracy and must be verified.
-
-Reference: [Nmap manual](https://nmap.org/book/man.html) and
-[Nmap XML interface](https://nmap.org/book/output-formats-xml-output.html).
-Run tests with `python -m unittest -v test_scanner.py test_nmap_backend.py`.
-
-**Simple TCP port scanning with local guidance and optional AI explanations.**
-
-## Quick start: scan ports
-
-Python 3.10+ is all the basic scanner needs. No Nmap, administrator privileges,
-API key, or Python dependencies are required for this command:
+## Scan and summarize
 
 ```sh
-python -m sentinel scan 127.0.0.1 -p 22,80,443,8000-8010
-python -m sentinel scan localhost -p 1-1024 --open-only
-python -m sentinel scan 127.0.0.1 -p 22,80,443 --json
-python -m sentinel scan 127.0.0.1 -p 22,80,443 --output scan.json
+python -m sentinel scan 127.0.0.1 -p 22,80,443
+python -m sentinel scan 127.0.0.1 -p 1-1024 --services --os
+python -m sentinel scan 127.0.0.1 -p 22,80,443 --services --ai
+python -m sentinel scan 127.0.0.1 -p 1-65535 --open-only -o scan.json
 ```
 
-Use only on systems you own or have permission to test. Each invocation scans
-one hostname or IP; a hostname resolves once and uses its first returned address.
-IPv4 and IPv6 are supported. Omit `-p` for 28 common ports, or use `-p 1-65535`
-for all TCP ports. Default concurrency is 64 connections and timeout is one
-second; adjust with `--workers 16 --timeout 3` for slower networks.
+Only scan systems you own or have permission to test. One invocation scans one
+hostname or IP, using the first address returned by DNS. IPv4 and IPv6 work.
+Omit `-p` to check 28 common ports. Use comma-separated ports, ranges, or both.
 
-- **open:** the TCP connection succeeded.
-- **closed:** the target refused the connection.
-- **filtered:** no response arrived before the timeout; packet loss or a slow
-  host can produce the same result, so filtering is uncertain.
-- **unreachable / error:** a routing or local socket problem prevented a result;
-  these are never silently reported as closed.
+Results distinguish accepted connections (`open`), refused connections (`closed`),
+timeouts (`filtered`, uncertain), unreachable routes and local socket errors.
+Timeouts do not prove filtering. `--retries 1` retries timed-out connections
+once by default; set 0-3. `--timeout 3` changes the per-operation timeout in
+seconds. `--workers 64` controls concurrency (1-256). Both active threads and
+queued probes are bounded, including when scanning all 65,535 TCP ports.
 
-Every result includes a reason and a port-based service hint. Hints are guesses,
-not service/version detection. Open ports include local, rule-based defensive
-guidance; this guidance is not AI and does not prove a vulnerability. JSON
-reports keep all scanned ports even when `--open-only` hides rows in the terminal.
-`--output` creates a new file and refuses to overwrite existing files.
+Every scan includes a local factual summary and defensive guidance. This local
+summary is deterministic, not AI. `--services` additionally opens a connection
+to each open port, reads up to 4 KiB of banner data, sends an HTTP HEAD request
+on common web ports, and performs TLS handshakes on common TLS ports. It never
+follows web redirects, authenticates, or executes remote content. Banner-less
+services may remain unidentified. These probes can be logged by the target.
 
-For an optional AI explanation, set `GEMINI_API_KEY` in your environment, then:
+Service hints come from the local port database and are guesses. Observed SSH
+identifiers, HTTP headers and negotiated TLS versions/ciphers are stored
+separately as evidence. TLS inspection does not validate certificates and does
+not claim they are trusted. Banners can be misleading or intentionally spoofed.
+
+`--os` enables service inspection and reports low-confidence OS clues such as
+an Ubuntu or Microsoft IIS banner. These may describe a proxy or container;
+they are not remote OS fingerprinting. Without evidence, OS remains `unknown`.
+This version does not implement UDP/SYN scanning, traceroute, NSE scripts or
+Nmap-level OS fingerprints. There is no claim of superior scanning accuracy
+or performance; its focus is independent operation and understandable results.
+
+## AI summary
+
+Set `GEMINI_API_KEY` in your environment and add `--ai`:
 
 ```sh
-python -m sentinel scan 127.0.0.1 -p 22,80,443 --ai
+python -m sentinel scan 127.0.0.1 -p 22,80,443 --services --os --ai
 ```
 
-**`--ai` explicitly sends the target, resolved address, port results and local
-guidance to Google's Gemini API.** Omit it to keep results local. Optionally set
-`GEMINI_MODEL` for a model available to your account. AI text is unverified;
-API failure leaves the measured scan and local guidance available. Never commit
-API keys. After installing the full package, `sentinel scan` and the dedicated
-`sentinel-scan` entry point are also available.
+The default model is `gemini-3.8-flash`. Override `GEMINI_MODEL` with a supported
+model available to your account. Never commit API keys. With `--ai`, Sentinel
+sends the target, address, aggregate counts, local summary, OS clues and up to
+200 open-port records (including collected banners) to Google's Gemini API.
+Without `--ai`, no scan data goes to an AI provider. The report explicitly says
+when open-port records were omitted from AI input. AI only explains results;
+it does not choose targets, run scans or change measured port states.
 
-The basic engine is a beginner-friendly TCP connect scanner. Use the Nmap engine
-above for UDP/SYN scans, OS fingerprinting, and service version detection.
-Neither engine treats open ports or version matches as verified vulnerabilities.
-Existing monitoring features remain below.
+AI is asked to explain observations, uncertainties and defensive next steps
+without inventing vulnerabilities or an operating system. Text from remote
+services is treated as untrusted data. Model output remains unverified. If the
+API fails or returns no usable text, scan results and the local summary remain
+available. The live API requires your own configured key and provider access.
 
-Validate the scanner with `python -m unittest -v test_scanner.py`.
+Use `--json` for machine-readable stdout or `-o FILE` to create a JSON report;
+existing files are never overwritten. `--open-only` hides table rows but keeps
+every scanned port in JSON. After full package installation, `sentinel scan`
+and `sentinel-scan` are available as command-line entry points.
+
+```sh
+python -m unittest -v test_scanner.py test_native_features.py
+```
+
+The existing optional monitoring and alert tools are documented below.
+
 
 **Local-first network security monitoring in your terminal.** Sentinel-AI
 normalizes firewall and network-sensor logs, detects possible scans, scores
